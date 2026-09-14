@@ -468,11 +468,11 @@ function renderTrabajadorBody(wrap){
     const especial = esDiaEspecial(opciones);
     const card = el('div',{class:'day-card'+(especial?' especial':'')});
     const h3 = el('h3',{}, `${dia} · ${fechaDia(state.semanaRef,dia).split('-').reverse().join('-')}`);
+    card.appendChild(h3);
     if(especial){
       const descEsp = descripcionEspecialDia(opciones);
-      h3.appendChild(el('span',{class:'pill especial'}, descEsp ? `🌟 Mejorado: ${descEsp}` : '🌟 Almuerzo mejorado'));
+      card.appendChild(el('div',{class:'pill especial',style:'display:block;width:fit-content;margin-bottom:10px'}, descEsp ? `🌟 Mejorado: ${descEsp}` : '🌟 Almuerzo mejorado'));
     }
-    card.appendChild(h3);
     const actual = misPedidos.find(p=>p.dia===dia);
     opciones.forEach(o=>{
       const isSel = actual && String(actual.opcion)===String(o.opcion);
