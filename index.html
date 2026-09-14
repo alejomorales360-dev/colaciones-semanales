@@ -873,18 +873,21 @@ function renderAdminMenu(){
       codeFieldEsp.appendChild(inpCodeEsp);
       const descFieldEsp = el('div',{class:'field'});
       descFieldEsp.appendChild(el('label',{},'Qué incluye el almuerzo mejorado'));
-      const inpDescEsp = el('input',{type:'text',value:descripcionEspecialDia(opciones),placeholder:'Ej: Torta con bebida',style:'background:var(--am2);border-color:var(--amber)'});
+      const descripcionGuardada = descripcionEspecialDia(opciones);
+      const inpDescEsp = el('input',{type:'text',value:descripcionGuardada,placeholder:'Ej: Torta con bebida',style:'background:var(--am2);border-color:var(--amber)'});
       inpDescEsp.disabled = bloqueado;
       descFieldEsp.appendChild(inpDescEsp);
       const btnSaveEsp = el('button',{class:'btn sm',style:'margin-top:18px;background:var(--amber);border-color:var(--amber);color:#fff'},'Guardar');
       btnSaveEsp.disabled = bloqueado;
-      btnSaveEsp.onclick = async ()=>{
-        btnSaveEsp.disabled = true;
+      const guardarDescEsp = async ()=>{
         const descripcionEspecial = inpDescEsp.value.trim();
+        if(descripcionEspecial === inpDescEsp.dataset.guardado) return;
+        btnSaveEsp.disabled = true;
         try{
           const res = await callApi({action:'marcarDiaEspecial', semana, dia, especial:true, descripcionEspecial});
           if(res.ok){
             opciones.forEach(o=>o.descripcionespecial = descripcionEspecial);
+            inpDescEsp.dataset.guardado = descripcionEspecial;
             btnSaveEsp.textContent='✓'; setTimeout(()=>btnSaveEsp.textContent='Guardar',1000);
           } else alert(res.error||'Error');
         } catch(err){
@@ -893,8 +896,19 @@ function renderAdminMenu(){
           btnSaveEsp.disabled = false;
         }
       };
+      inpDescEsp.dataset.guardado = descripcionGuardada;
+      // Se guarda también al salir del campo (o con Enter), para que no
+      // quede sin efecto si el admin olvida tocar el botón "Guardar" y los
+      // trabajadores terminen viendo el aviso genérico sin el detalle.
+      inpDescEsp.addEventListener('blur', guardarDescEsp);
+      inpDescEsp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); inpDescEsp.blur(); } });
+      btnSaveEsp.onclick = guardarDescEsp;
       rEsp.append(codeFieldEsp, descFieldEsp, btnSaveEsp);
       card.appendChild(rEsp);
+      if(!descripcionGuardada){
+        card.appendChild(el('div',{class:'msg info',style:'margin-top:-4px;margin-bottom:12px;font-size:12.5px'},
+          '👆 Escribe qué incluye el almuerzo mejorado: sin esto, los trabajadores solo verán el aviso genérico "Almuerzo mejorado".'));
+      }
     }
     opciones.forEach(o=>{
       const r = el('div',{class:'row',style:'align-items:flex-start'});
