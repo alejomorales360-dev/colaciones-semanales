@@ -168,11 +168,35 @@ function hojaAObjetosCol(nombreHoja) {
       return obj;
     });
 }
+// Lectura de Menus por posicion de columna (no por el texto de la
+// cabecera): si a alguien se le corrompio o le falta el titulo de la
+// columna G (DescripcionEspecial) -por ejemplo en una planilla creada antes
+// de agregar esa columna y donde nunca se corrio agregarColumnaDescripcionEspecial
+// prolijamente-, hojaAObjetosCol() no generaba la clave "descripcionespecial"
+// y el detalle del almuerzo mejorado se guardaba en la hoja pero nunca le
+// llegaba al trabajador. Esta funcion siempre devuelve las 7 claves fijas.
+function menusAObjetosCol() {
+  const h = getHojaCol(HOJAS_COL.MENUS);
+  const v = h.getDataRange().getValues();
+  if (v.length < 2) return [];
+  return v.slice(1)
+    .filter(f => f.some(c => String(c).trim() !== ''))
+    .map((f, idx) => ({
+      _fila: idx + 2,
+      semana: f[0] instanceof Date ? formatearFechaCol(f[0]) : (f[0] != null ? f[0] : ''),
+      dia: f[1] != null ? f[1] : '',
+      opcion: f[2] != null ? f[2] : '',
+      descripcion: f[3] != null ? f[3] : '',
+      activo: f[4] != null ? f[4] : '',
+      especial: f[5] != null ? f[5] : '',
+      descripcionespecial: f[6] != null ? f[6] : ''
+    }));
+}
 function obtenerTodoCol() {
   return {
     ok: true,
     trabajadores: hojaAObjetosCol(HOJAS_COL.TRABAJADORES),
-    menus: hojaAObjetosCol(HOJAS_COL.MENUS),
+    menus: menusAObjetosCol(),
     pedidos: hojaAObjetosCol(HOJAS_COL.PEDIDOS),
     platos: listarPlatosCol(),
     config: obtenerConfigCol(),
@@ -251,7 +275,7 @@ function verificarLoginAdminCol(password) {
   return {
     ok: true,
     trabajadores: hojaAObjetosCol(HOJAS_COL.TRABAJADORES),
-    menus: hojaAObjetosCol(HOJAS_COL.MENUS),
+    menus: menusAObjetosCol(),
     pedidos: hojaAObjetosCol(HOJAS_COL.PEDIDOS),
     platos: listarPlatosCol(),
     config: cfg
@@ -473,7 +497,7 @@ function loginTrabajadorCol(rutIngresado) {
   return {
     ok: true,
     trabajador: { rut: String(t.rut), nombre: String(t.nombre), tipo: String(t.tipo || 'Fijo') },
-    menus: hojaAObjetosCol(HOJAS_COL.MENUS),
+    menus: menusAObjetosCol(),
     pedidos: misPedidos,
     config: obtenerConfigCol()
   };
@@ -564,7 +588,7 @@ function agregarHojaPlatos() {
   let h = ss.getSheetByName(HOJAS_COL.PLATOS);
   if (!h) h = ss.insertSheet(HOJAS_COL.PLATOS);
   if (h.getLastRow() === 0) h.appendRow(['Nombre']);
-  const menus = hojaAObjetosCol(HOJAS_COL.MENUS);
+  const menus = menusAObjetosCol();
   let agregados = 0;
   menus.forEach(m => {
     if (m.descripcion) {
