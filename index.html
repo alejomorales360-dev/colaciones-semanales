@@ -806,16 +806,27 @@ function renderAdminMenu(){
       chkEsp.disabled = bloqueado;
       lblEsp.append(chkEsp, document.createTextNode('🌟 Almuerzo mejorado este día'));
       chkEsp.onchange = async ()=>{
+        const nuevoValor = chkEsp.checked;
         chkEsp.disabled = true;
-        const res = await callApi({action:'marcarDiaEspecial', semana, dia, especial:chkEsp.checked});
-        chkEsp.disabled = false;
-        if(res.ok){
-          opciones.forEach(o=>{
-            o.especial = chkEsp.checked ? 'Si':'No';
-            o.descripcionespecial = chkEsp.checked ? (o.descripcionespecial||'') : '';
-          });
+        try{
+          const res = await callApi({action:'marcarDiaEspecial', semana, dia, especial:nuevoValor});
+          if(res.ok){
+            opciones.forEach(o=>{
+              o.especial = nuevoValor ? 'Si':'No';
+              o.descripcionespecial = nuevoValor ? (o.descripcionespecial||'') : '';
+            });
+          } else {
+            alert(res.error||'Error');
+          }
+        } catch(err){
+          alert('No se pudo conectar al servidor.');
+        } finally {
+          // Se vuelve a dibujar siempre (haya funcionado o no) para que el
+          // casillero y el bloque 🌟 nunca queden desincronizados: si la
+          // llamada falló, esto restaura el estado real en vez de dejar el
+          // bloque "pegado" en pantalla.
           render();
-        } else { chkEsp.checked = !chkEsp.checked; alert(res.error||'Error'); }
+        }
       };
       head.appendChild(lblEsp);
     }
@@ -837,12 +848,17 @@ function renderAdminMenu(){
       btnSaveEsp.onclick = async ()=>{
         btnSaveEsp.disabled = true;
         const descripcionEspecial = inpDescEsp.value.trim();
-        const res = await callApi({action:'marcarDiaEspecial', semana, dia, especial:true, descripcionEspecial});
-        btnSaveEsp.disabled = false;
-        if(res.ok){
-          opciones.forEach(o=>o.descripcionespecial = descripcionEspecial);
-          btnSaveEsp.textContent='✓'; setTimeout(()=>btnSaveEsp.textContent='Guardar',1000);
-        } else alert(res.error||'Error');
+        try{
+          const res = await callApi({action:'marcarDiaEspecial', semana, dia, especial:true, descripcionEspecial});
+          if(res.ok){
+            opciones.forEach(o=>o.descripcionespecial = descripcionEspecial);
+            btnSaveEsp.textContent='✓'; setTimeout(()=>btnSaveEsp.textContent='Guardar',1000);
+          } else alert(res.error||'Error');
+        } catch(err){
+          alert('No se pudo conectar al servidor.');
+        } finally {
+          btnSaveEsp.disabled = false;
+        }
       };
       rEsp.append(codeFieldEsp, descFieldEsp, btnSaveEsp);
       card.appendChild(rEsp);
