@@ -64,6 +64,7 @@ button{cursor:pointer}
 .hdr .who{font-size:12px;color:rgba(255,255,255,.85);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:38vw}
 .hdr .btn{background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.4);color:#fff}
 .hdr .btn:hover{background:rgba(255,255,255,.25)}
+.avatar-ini{width:34px;height:34px;min-width:34px;border-radius:50%;background:rgba(255,255,255,.2);border:1.5px solid rgba(255,255,255,.55);color:#fff;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center}
 .btn{border:1px solid var(--bd2);background:var(--bg);border-radius:var(--r);padding:11px 16px;font-weight:600;font-size:14.5px;transition:.15s;min-height:44px}
 .btn:hover{background:var(--bg2)}
 .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
@@ -374,11 +375,13 @@ function renderLogin(){
 }
 
 // ---------- shared header ----------
-function topHeader(title, who, onExit, onRefrescar){
+function topHeader(title, who, onExit, onRefrescar, opts){
+  opts = opts || {};
   const hdr = el('div',{class:'hdr no-print'});
   const inn = el('div',{class:'hdr-in'});
+  if(opts.avatar) inn.appendChild(el('div',{class:'avatar-ini',title:who||''}, opts.avatar));
   inn.appendChild(el('h1',{},title));
-  if(who) inn.appendChild(el('span',{class:'who'}, who));
+  if(who && !opts.avatar) inn.appendChild(el('span',{class:'who'}, who));
   if(onRefrescar){
     const btnRef = el('button',{class:'btn sm',title:'Actualizar datos'},'🔄');
     btnRef.onclick = async ()=>{
@@ -388,7 +391,7 @@ function topHeader(title, who, onExit, onRefrescar){
     };
     inn.appendChild(btnRef);
   }
-  const out = el('button',{class:'btn sm'},'Salir');
+  const out = el('button',{class:'btn sm'+(opts.salirRojo?' danger':''),title:'Cerrar sesión'},'⎋ Salir');
   out.onclick = onExit;
   inn.appendChild(out);
   hdr.appendChild(inn);
@@ -403,9 +406,24 @@ function fetchTodoAdmin(){
 // ============================================================
 // TRABAJADOR
 // ============================================================
+// Chile: nombre completo suele venir como "ApellidoPaterno ApellidoMaterno
+// Nombre1 Nombre2...". Se usa para el saludo y las iniciales del avatar.
+function primerNombreDe(nombreCompleto){
+  const partes = String(nombreCompleto||'').trim().split(/\s+/).filter(Boolean);
+  if(!partes.length) return '';
+  return partes.length>=3 ? partes[2] : partes[partes.length-1];
+}
+function inicialesDe(nombreCompleto){
+  const partes = String(nombreCompleto||'').trim().split(/\s+/).filter(Boolean);
+  if(!partes.length) return '';
+  const primerNombre = primerNombreDe(nombreCompleto);
+  return ((primerNombre[0]||'') + (partes[0][0]||'')).toUpperCase();
+}
 function renderTrabajador(){
   const root = el('div',{});
-  root.appendChild(topHeader('🍽️ Colaciones', state.trabajador.nombre, ()=>{ state.role=null; state.trabajador=null; render(); }));
+  const nombre = state.trabajador.nombre;
+  const primerNombre = primerNombreDe(nombre);
+  root.appendChild(topHeader(primerNombre?`Hola, ${primerNombre}`:'🍽️ Colaciones', nombre, ()=>{ state.role=null; state.trabajador=null; render(); }, null, {avatar:inicialesDe(nombre), salirRojo:true}));
   const wrap = el('div',{class:'wrap'});
 
   wrap.appendChild(weekNav(()=>renderTrabajadorBody(wrap)));
@@ -467,10 +485,11 @@ function renderTrabajadorBody(wrap){
       txt.appendChild(el('span',{class:'code'}, o.opcion+':'));
       txt.appendChild(document.createTextNode(o.descripcion||''));
       optEl.appendChild(txt);
-      if(isSel && !cerrado) optEl.appendChild(el('span',{style:'font-size:11.5px;font-weight:700;color:var(--t2);white-space:nowrap'},'✕ Quitar'));
+      if(isSel && !cerrado) optEl.appendChild(el('span',{style:'font-size:11.5px;font-weight:700;color:var(--red);white-space:nowrap'},'✕ Quitar'));
       optEl.onclick = async (e)=>{
         e.preventDefault();
         if(cerrado) return;
+        if(isSel && !confirm(`¿Quitar tu elección (${o.opcion}) de ${dia}?`)) return;
         optEl.style.opacity=.6;
         const idx = state.data.pedidos.findIndex(p=>p.semana===semana && p.dia===dia && normRut(p.rut)===normRut(state.trabajador.rut));
         if(isSel){
