@@ -241,6 +241,19 @@ function calcularCierre(semanaMonday, config){
 function inscripcionesCerradas(semanaMonday, config){
   return new Date() > calcularCierre(semanaMonday, config);
 }
+// Primera semana (desde la actual en adelante) que todavía admite ingresar
+// el menú. Como el cierre por defecto cae antes de que la semana empiece,
+// la semana "actual" casi siempre ya está cerrada; el admin necesita partir
+// viendo la próxima semana abierta, no una ya bloqueada.
+function proximaSemanaAbierta(config){
+  let semana = mondayOf(new Date());
+  let intentos = 0;
+  while(inscripcionesCerradas(semana, config) && intentos < 12){
+    semana = addDays(semana, 7);
+    intentos++;
+  }
+  return semana;
+}
 // Rescata un HH:MM valido desde cualquier valor guardado en cierre_hora,
 // incluso si quedo corrompido como una fecha/hora completa (ISO); si no
 // encuentra nada usable, devuelve el valor por defecto.
@@ -352,6 +365,7 @@ function renderLogin(){
     }
     state.role='admin';
     state.data = res;
+    state.semanaRef = proximaSemanaAbierta(res.config);
     render();
   };
   formA.querySelector('input').addEventListener('keydown', e=>{ if(e.key==='Enter') btnA.click(); });
