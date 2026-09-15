@@ -175,6 +175,7 @@ tr:hover td{background:var(--bg2)}
   .card.tone-no{border-left:4px solid #c0392b}
   .card h2{color:#000}
   .stat-row{break-inside:avoid}
+  .page-break{page-break-before:always}
   table{font-size:11px}
   th,td{padding:4px 6px;border-bottom:1px solid #ddd}
   tr{break-inside:avoid}
@@ -1106,8 +1107,8 @@ function renderAdminReportes(){
   desgloseCard.appendChild(dwrap);
   box.appendChild(desgloseCard);
 
-  box.appendChild(personListCard(`✅ Anotados (${anotados.length})`, anotados, pedidosSemana, diasConMenu, diasEspeciales, 'ok'));
-  box.appendChild(personListCard(`⚠️ Sin anotarse (${noAnotados.length})`, noAnotados, pedidosSemana, diasConMenu, diasEspeciales, 'no'));
+  box.appendChild(personListCard(`✅ Anotados (${anotados.length})`, anotados, pedidosSemana, diasConMenu, diasEspeciales, 'ok', true));
+  box.appendChild(personListCard(`⚠️ Sin anotarse (${noAnotados.length})`, noAnotados, pedidosSemana, diasConMenu, diasEspeciales, 'no', true));
 
   const editando = elegibles.find(t=>normRut(t.rut)===state.editandoRut);
   if(editando) box.appendChild(renderEditorPedido(editando, pedidosSemana, diasConMenu, menusPorDia, semana));
@@ -1221,18 +1222,19 @@ function chartsCard(tituloBarras, barItems, okN, noN, okLabel, noLabel){
 // fila tiene un botón "✏️" para abrir el panel de edición de esa persona
 // (ver renderEditorPedido) en vez de mostrar un <select> por día y por
 // persona, que con muchos trabajadores se vuelve pesado y feo de imprimir.
-function personListCard(title, list, pedidosSemana, dias, diasEspeciales, tono){
-  const card = el('div',{class:'card'+(tono?' tone-'+tono:'')});
+function personListCard(title, list, pedidosSemana, dias, diasEspeciales, tono, saltoPagina){
+  const card = el('div',{class:'card'+(tono?' tone-'+tono:'')+(saltoPagina?' page-break':'')});
   card.appendChild(el('h2',{},title));
   if(!list.length){ card.appendChild(el('div',{class:'empty'},'Sin registros.')); return card; }
   const twrap = el('div',{class:'tbl-wrap'});
   const tbl = el('table',{});
-  const head = el('tr',{}); ['Nombre','RUT'].forEach(h=>head.appendChild(el('th',{},h)));
+  const head = el('tr',{}); ['N°','Nombre','RUT'].forEach(h=>head.appendChild(el('th',{},h)));
   dias.forEach(d=>head.appendChild(el('th',{}, d.slice(0,3) + (diasEspeciales&&diasEspeciales.has(d)?' 🌟':''))));
   head.appendChild(el('th',{class:'no-print'},''));
   tbl.appendChild(head);
-  list.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).forEach(t=>{
+  list.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).forEach((t,idx)=>{
     const tr = el('tr',{});
+    tr.appendChild(el('td',{},String(idx+1)));
     tr.appendChild(el('td',{},t.nombre + (t.tipo==='Spot'?' 🔸':'')));
     tr.appendChild(el('td',{},t.rut));
     dias.forEach(d=>{
@@ -1329,9 +1331,9 @@ function exportarExcel(semana, anotados, noAnotados, pedidosSemana, menusSemana,
   // Hoja 3: Anotados, con el plato elegido cada día
   const menusPorDia = {};
   dias.forEach(d=>{ menusPorDia[d] = menusSemana.filter(m=>m.dia===d); });
-  const filasAnotados = [['Nombre','RUT','Tipo', ...dias.map(nombreDia)]];
-  anotados.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).forEach(t=>{
-    const fila = [t.nombre, t.rut, t.tipo];
+  const filasAnotados = [['N°','Nombre','RUT','Tipo', ...dias.map(nombreDia)]];
+  anotados.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).forEach((t,idx)=>{
+    const fila = [idx+1, t.nombre, t.rut, t.tipo];
     dias.forEach(d=>{
       const p = pedidosSemana.find(x=>normRut(x.rut)===normRut(t.rut) && x.dia===d);
       if(!p){ fila.push('Sin elegir'); return; }
@@ -1343,9 +1345,9 @@ function exportarExcel(semana, anotados, noAnotados, pedidosSemana, menusSemana,
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filasAnotados), 'Anotados');
 
   // Hoja 4: Sin anotarse
-  const filasSinAnotar = [['Nombre','RUT','Tipo']];
-  noAnotados.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).forEach(t=>{
-    filasSinAnotar.push([t.nombre, t.rut, t.tipo]);
+  const filasSinAnotar = [['N°','Nombre','RUT','Tipo']];
+  noAnotados.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).forEach((t,idx)=>{
+    filasSinAnotar.push([idx+1, t.nombre, t.rut, t.tipo]);
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filasSinAnotar), 'Sin anotarse');
 
@@ -1519,9 +1521,9 @@ function exportarExcelPeriodo(desde, hasta, datosPorSemana, listaFaltas){
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filasDetalle), 'Detalle por semana');
 
-  const filasFaltas = [['Nombre','RUT','Tipo','N° semanas sin anotarse','Semanas']];
-  listaFaltas.forEach(f=>{
-    filasFaltas.push([f.nombre, f.rut, f.tipo, f.semanas.length, f.semanas.map(fmtFechaCorta).join(', ')]);
+  const filasFaltas = [['N°','Nombre','RUT','Tipo','N° semanas sin anotarse','Semanas']];
+  listaFaltas.forEach((f,idx)=>{
+    filasFaltas.push([idx+1, f.nombre, f.rut, f.tipo, f.semanas.length, f.semanas.map(fmtFechaCorta).join(', ')]);
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filasFaltas), 'Sin anotarse');
 
