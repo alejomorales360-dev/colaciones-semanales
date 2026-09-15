@@ -1044,7 +1044,7 @@ function renderAdminReportes(){
   btnXls.onclick = ()=>exportarExcel(semana, anotados, noAnotados, pedidosSemana, menusSemana, diasEspeciales);
   const btnSodexo = el('button',{class:'btn'},'🍽️ Reporte Sodexo (Excel)');
   btnSodexo.disabled = !diasConMenuSodexo.length;
-  btnSodexo.onclick = ()=>exportarSodexo(semana, diasConMenuSodexo, pedidosSemana, state.data.trabajadores, state.data.config.nombre_sitio||'');
+  btnSodexo.onclick = ()=>exportarSodexo(semana, diasConMenuSodexo, pedidosSemana, elegibles, menusSemana, state.semanaRef, state.data.config.nombre_sitio||'');
   toolbar.append(btnPdf, btnXls, btnSodexo);
   box.appendChild(toolbar);
 
@@ -1321,20 +1321,6 @@ function renderEditorPedido(persona, pedidosSemana, dias, menusPorDia, semana){
   modal.appendChild(body);
   return modal;
 }
-// Arma las filas NR | RUT | NOMBRE (con el nombre del sitio arriba, si esta
-// configurado) para un dia puntual: el formato que pide Sodexo para saber a
-// quienes hay que facturarles/prepararles colacion ese dia.
-function filasSodexoDia(pedidosDia, trabajadores, nombreSitio){
-  const filas = [];
-  if(nombreSitio) filas.push([nombreSitio]);
-  filas.push(['NR','RUT','NOMBRE']);
-  pedidosDia
-    .map(p=>trabajadores.find(t=>normRut(t.rut)===normRut(p.rut)))
-    .filter(Boolean)
-    .sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre)))
-    .forEach((t,idx)=>filas.push([idx+1, t.rut, t.nombre]));
-  return filas;
-}
 // Nombre de hoja de Excel valido: maximo 31 caracteres, sin \/?*[]:  y sin
 // repetirse dentro del mismo libro.
 function nombreHojaUnico(base, usados){
@@ -1344,32 +1330,143 @@ function nombreHojaUnico(base, usados){
   usados.add(nombre);
   return nombre;
 }
-// Reporte Sodexo de una semana: una hoja por dia con menu publicado, cada
-// una con la lista de quienes se anotaron ese dia (para la empresa de
-// colaciones, no para uso interno).
-function exportarSodexo(semana, diasConMenu, pedidosSemana, trabajadores, nombreSitio){
+const MESES_COL = ['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+// "LUNES 07 SEPTIEMBRE" a partir de una fecha AAAA-MM-DD y el nombre del dia.
+function tituloDiaFecha(fechaIso, dia){
+  const [,m,d] = fechaIso.split('-');
+  return `${dia.toUpperCase()} ${d} ${MESES_COL[Number(m)-1]}`;
+}
+// Cuenta cuantas veces se eligio cada plato ese dia (agrupando por el texto
+// de la descripcion, no por la letra de opcion) y aparte cuantos pedidos no
+// calzan con ningun plato con descripcion (van al total como "Colación",
+// igual que en la planilla de referencia de Sodexo).
+function desgloseDiaSodexo(pedidosDia, opcionesDia){
+  const conteos = new Map();
+  let colacion = 0;
+  pedidosDia.forEach(p=>{
+    const m = opcionesDia.find(o=>String(o.opcion)===String(p.opcion));
+    const desc = (m && m.descripcion && String(m.descripcion).trim()) ? String(m.descripcion).trim() : '';
+    if(!desc){ colacion++; return; }
+    conteos.set(desc, (conteos.get(desc)||0)+1);
+  });
+  const platos = Array.from(conteos.entries());
+  const total = platos.reduce((s,[,q])=>s+q,0);
+  return { platos, total, colacion, totalDia: total+colacion };
+}
+// Bloque RESUMEN (platos + cantidad, Total, Colación, Total <día>) para uno
+// o varios días puestos en columnas una al lado de la otra, como en la hoja
+// general de Sodexo. Devuelve las filas a continuación de las que ya tenga
+// la hoja, más el rango a fusionar para la etiqueta "RESUMEN".
+function filasResumenSodexo(diasInfo, filaInicial, colInicial){
+  const desgloses = diasInfo.map(d=>desgloseDiaSodexo(d.pedidos, d.opciones));
+  const maxPlatos = Math.max(0, ...desgloses.map(x=>x.platos.length));
+  const totalFilas = maxPlatos + 3;
+  const filas = [];
+  for(let i=0;i<totalFilas;i++){
+    const fila = [];
+    if(i===0) fila[0] = 'RESUMEN';
+    diasInfo.forEach((d,di)=>{
+      const desg = desgloses[di];
+      const c1 = colInicial + di*2, c2 = c1+1;
+      if(i < desg.platos.length){ fila[c1]=desg.platos[i][0]; fila[c2]=desg.platos[i][1]; }
+      else if(i===maxPlatos){ fila[c1]='Total'; fila[c2]=desg.total; }
+      else if(i===maxPlatos+1){ fila[c1]='Colación'; fila[c2]=desg.colacion||''; }
+      else if(i===maxPlatos+2){ fila[c1]=`Total ${d.label}`; fila[c2]=desg.totalDia; }
+    });
+    filas.push(fila);
+  }
+  return { filas, merge: { s:{r:filaInicial,c:0}, e:{r:filaInicial+totalFilas-1,c:1} } };
+}
+// Hoja "General": una fila por persona con el plato elegido cada día (o
+// "Ninguno (Ausente)"), y debajo el resumen de todos los días uno al lado
+// del otro.
+function hojaGeneralSodexo(personas, diasInfo){
+  const header = ['N°','Nombre', ...diasInfo.map(d=>d.label)];
+  const filas = [header];
+  personas.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).forEach((t,idx)=>{
+    const fila = [idx+1, t.nombre];
+    diasInfo.forEach(d=>{
+      const p = d.pedidos.find(x=>normRut(x.rut)===normRut(t.rut));
+      if(!p){ fila.push('Ninguno (Ausente)'); return; }
+      const m = d.opciones.find(o=>String(o.opcion)===String(p.opcion));
+      fila.push((m && m.descripcion && String(m.descripcion).trim()) ? m.descripcion : 'Colación');
+    });
+    filas.push(fila);
+  });
+  filas.push([]);
+  const { filas: filasResumen, merge } = filasResumenSodexo(diasInfo, filas.length, 2);
+  filas.push(...filasResumen);
+  const ws = XLSX.utils.aoa_to_sheet(filas);
+  ws['!merges'] = [merge];
+  return ws;
+}
+// Hoja de un solo día: N°|RUT|Nombre|Plato de quienes se anotaron ese día
+// (para facturar/preparar), más su propio resumen abajo.
+function hojaDiaSodexo(pedidosDia, opciones, trabajadores, nombreSitio, label){
+  const filas = [];
+  if(nombreSitio) filas.push([nombreSitio]);
+  filas.push(['N°','RUT','Nombre','Plato']);
+  pedidosDia
+    .map(p=>{
+      const t = trabajadores.find(x=>normRut(x.rut)===normRut(p.rut));
+      if(!t) return null;
+      const m = opciones.find(o=>String(o.opcion)===String(p.opcion));
+      return { rut:t.rut, nombre:t.nombre, plato:(m && m.descripcion && String(m.descripcion).trim()) ? m.descripcion : 'Colación' };
+    })
+    .filter(Boolean)
+    .sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre)))
+    .forEach((t,idx)=>filas.push([idx+1, t.rut, t.nombre, t.plato]));
+  filas.push([]);
+  const { filas: filasResumen, merge } = filasResumenSodexo([{label, pedidos:pedidosDia, opciones}], filas.length, 2);
+  filas.push(...filasResumen);
+  const ws = XLSX.utils.aoa_to_sheet(filas);
+  ws['!merges'] = [merge];
+  return ws;
+}
+// Reporte Sodexo de una semana: hoja "General" (todos los días uno al lado
+// del otro + resumen general) más una hoja por día con menú publicado,
+// cada una con su propio resumen.
+function exportarSodexo(semana, diasConMenu, pedidosSemana, elegibles, menusSemana, semanaRef, nombreSitio){
   const wb = XLSX.utils.book_new();
   const usados = new Set();
-  diasConMenu.forEach(dia=>{
-    const pedidosDia = pedidosSemana.filter(p=>p.dia===dia);
-    const filas = filasSodexoDia(pedidosDia, trabajadores, nombreSitio);
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filas), nombreHojaUnico(dia, usados));
+  const diasInfo = diasConMenu.map(dia=>({
+    label: tituloDiaFecha(fechaDia(semanaRef,dia), dia),
+    pedidos: pedidosSemana.filter(p=>p.dia===dia),
+    opciones: menusSemana.filter(m=>m.dia===dia)
+  }));
+  XLSX.utils.book_append_sheet(wb, hojaGeneralSodexo(elegibles, diasInfo), nombreHojaUnico('General', usados));
+  diasInfo.forEach(d=>{
+    XLSX.utils.book_append_sheet(wb, hojaDiaSodexo(d.pedidos, d.opciones, elegibles, nombreSitio, d.label), nombreHojaUnico(d.label.split(' ')[0], usados));
   });
   XLSX.writeFile(wb, `reporte_sodexo_${semana}.xlsx`);
 }
-// Reporte Sodexo de un periodo: una hoja por cada dia con menu publicado de
-// cada semana del rango (fecha + dia en el nombre de la hoja).
+// Reporte Sodexo de un periodo: hoja "General" con todos los días de todas
+// las semanas del rango uno al lado del otro, más una hoja por cada día de
+// cada semana con menú publicado.
 function exportarSodexoPeriodo(datosPorSemana, trabajadores, nombreSitio){
   const wb = XLSX.utils.book_new();
   const usados = new Set();
+  const diasInfo = [];
   datosPorSemana.forEach(d=>{
-    const diasConMenu = DIAS.filter(dia=>d.menusSemana.some(m=>m.dia===dia));
-    diasConMenu.forEach(dia=>{
-      const pedidosDia = d.pedidosSemana.filter(p=>p.dia===dia);
-      const filas = filasSodexoDia(pedidosDia, trabajadores, nombreSitio);
-      const fecha = fechaDia(new Date(d.semana+'T00:00:00'), dia).split('-').reverse().join('-');
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filas), nombreHojaUnico(`${fecha} ${dia.slice(0,3)}`, usados));
+    const semanaRef = new Date(d.semana+'T00:00:00');
+    DIAS.filter(dia=>d.menusSemana.some(m=>m.dia===dia)).forEach(dia=>{
+      diasInfo.push({
+        label: tituloDiaFecha(fechaDia(semanaRef,dia), dia),
+        pedidos: d.pedidosSemana.filter(p=>p.dia===dia),
+        opciones: d.menusSemana.filter(m=>m.dia===dia)
+      });
     });
+  });
+  if(!diasInfo.length){ alert('No hay menús publicados en este periodo.'); return; }
+  const elegiblesUnicos = [];
+  const vistos = new Set();
+  datosPorSemana.forEach(d=>d.elegibles.forEach(t=>{
+    const clave = normRut(t.rut);
+    if(!vistos.has(clave)){ vistos.add(clave); elegiblesUnicos.push(t); }
+  }));
+  XLSX.utils.book_append_sheet(wb, hojaGeneralSodexo(elegiblesUnicos, diasInfo), nombreHojaUnico('General', usados));
+  diasInfo.forEach(d=>{
+    XLSX.utils.book_append_sheet(wb, hojaDiaSodexo(d.pedidos, d.opciones, trabajadores, nombreSitio, d.label), nombreHojaUnico(d.label, usados));
   });
   XLSX.writeFile(wb, `reporte_sodexo_periodo.xlsx`);
 }
