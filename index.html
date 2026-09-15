@@ -1037,6 +1037,8 @@ function renderAdminReportes(){
   const anotadosEnEspeciales = sd.pedidosEspeciales;
 
   const diasConMenuSodexo = DIAS.filter(d=>menusSemana.some(m=>m.dia===d));
+  const diasInfoSodexo = diasInfoSodexoSemana(diasConMenuSodexo, pedidosSemana, menusSemana, state.semanaRef);
+  const nombreSitio = state.data.config.nombre_sitio||'';
   const toolbar = el('div',{class:'toolbar no-print'});
   const btnPdf = el('button',{class:'btn'},'📄 Exportar / imprimir PDF');
   btnPdf.onclick = ()=>window.print();
@@ -1044,8 +1046,11 @@ function renderAdminReportes(){
   btnXls.onclick = ()=>exportarExcel(semana, anotados, noAnotados, pedidosSemana, menusSemana, diasEspeciales);
   const btnSodexo = el('button',{class:'btn'},'🍽️ Reporte Sodexo (Excel)');
   btnSodexo.disabled = !diasConMenuSodexo.length;
-  btnSodexo.onclick = ()=>exportarSodexo(semana, diasConMenuSodexo, pedidosSemana, elegibles, menusSemana, state.semanaRef, state.data.config.nombre_sitio||'');
-  toolbar.append(btnPdf, btnXls, btnSodexo);
+  btnSodexo.onclick = ()=>exportarSodexo(semana, diasInfoSodexo, elegibles, nombreSitio);
+  const btnSodexoPdf = el('button',{class:'btn'},'🎨 Reporte Sodexo (PDF)');
+  btnSodexoPdf.disabled = !diasConMenuSodexo.length;
+  btnSodexoPdf.onclick = ()=>abrirReporteSodexoPDF(nombreSitio, `Semana del ${fmtSemana(state.semanaRef)}`, diasInfoSodexo, elegibles);
+  toolbar.append(btnPdf, btnXls, btnSodexo, btnSodexoPdf);
   box.appendChild(toolbar);
 
   const stats = el('div',{class:'stat-row'});
@@ -1426,14 +1431,34 @@ function hojaDiaSodexo(pedidosDia, opciones, trabajadores, nombreSitio, label){
 // Reporte Sodexo de una semana: hoja "General" (todos los días uno al lado
 // del otro + resumen general) más una hoja por día con menú publicado,
 // cada una con su propio resumen.
-function exportarSodexo(semana, diasConMenu, pedidosSemana, elegibles, menusSemana, semanaRef, nombreSitio){
-  const wb = XLSX.utils.book_new();
-  const usados = new Set();
-  const diasInfo = diasConMenu.map(dia=>({
+// diasInfo compartido entre el Excel y el PDF "bonito" del Reporte Sodexo,
+// para que ambos muestren siempre los mismos datos.
+function diasInfoSodexoSemana(diasConMenu, pedidosSemana, menusSemana, semanaRef){
+  return diasConMenu.map(dia=>({
+    dia,
     label: tituloDiaFecha(fechaDia(semanaRef,dia), dia),
     pedidos: pedidosSemana.filter(p=>p.dia===dia),
     opciones: menusSemana.filter(m=>m.dia===dia)
   }));
+}
+function diasInfoSodexoPeriodo(datosPorSemana){
+  const diasInfo = [];
+  datosPorSemana.forEach(d=>{
+    const semanaRef = new Date(d.semana+'T00:00:00');
+    DIAS.filter(dia=>d.menusSemana.some(m=>m.dia===dia)).forEach(dia=>{
+      diasInfo.push({
+        dia,
+        label: tituloDiaFecha(fechaDia(semanaRef,dia), dia),
+        pedidos: d.pedidosSemana.filter(p=>p.dia===dia),
+        opciones: d.menusSemana.filter(m=>m.dia===dia)
+      });
+    });
+  });
+  return diasInfo;
+}
+function exportarSodexo(semana, diasInfo, elegibles, nombreSitio){
+  const wb = XLSX.utils.book_new();
+  const usados = new Set();
   XLSX.utils.book_append_sheet(wb, hojaGeneralSodexo(elegibles, diasInfo), nombreHojaUnico('General', usados));
   diasInfo.forEach(d=>{
     XLSX.utils.book_append_sheet(wb, hojaDiaSodexo(d.pedidos, d.opciones, elegibles, nombreSitio, d.label), nombreHojaUnico(d.label.split(' ')[0], usados));
@@ -1443,32 +1468,180 @@ function exportarSodexo(semana, diasConMenu, pedidosSemana, elegibles, menusSema
 // Reporte Sodexo de un periodo: hoja "General" con todos los días de todas
 // las semanas del rango uno al lado del otro, más una hoja por cada día de
 // cada semana con menú publicado.
-function exportarSodexoPeriodo(datosPorSemana, trabajadores, nombreSitio){
-  const wb = XLSX.utils.book_new();
-  const usados = new Set();
-  const diasInfo = [];
-  datosPorSemana.forEach(d=>{
-    const semanaRef = new Date(d.semana+'T00:00:00');
-    DIAS.filter(dia=>d.menusSemana.some(m=>m.dia===dia)).forEach(dia=>{
-      diasInfo.push({
-        label: tituloDiaFecha(fechaDia(semanaRef,dia), dia),
-        pedidos: d.pedidosSemana.filter(p=>p.dia===dia),
-        opciones: d.menusSemana.filter(m=>m.dia===dia)
-      });
-    });
-  });
-  if(!diasInfo.length){ alert('No hay menús publicados en este periodo.'); return; }
+function elegiblesUnicosPeriodo(datosPorSemana){
   const elegiblesUnicos = [];
   const vistos = new Set();
   datosPorSemana.forEach(d=>d.elegibles.forEach(t=>{
     const clave = normRut(t.rut);
     if(!vistos.has(clave)){ vistos.add(clave); elegiblesUnicos.push(t); }
   }));
+  return elegiblesUnicos;
+}
+function exportarSodexoPeriodo(diasInfo, elegiblesUnicos, trabajadores, nombreSitio){
+  const wb = XLSX.utils.book_new();
+  const usados = new Set();
   XLSX.utils.book_append_sheet(wb, hojaGeneralSodexo(elegiblesUnicos, diasInfo), nombreHojaUnico('General', usados));
   diasInfo.forEach(d=>{
     XLSX.utils.book_append_sheet(wb, hojaDiaSodexo(d.pedidos, d.opciones, trabajadores, nombreSitio, d.label), nombreHojaUnico(d.label, usados));
   });
   XLSX.writeFile(wb, `reporte_sodexo_periodo.xlsx`);
+}
+// ---- Reporte Sodexo "bonito" en PDF (tarjetas con color por día) ----
+const COLOR_SODEXO = {
+  Lunes:     {top:'#1D4ED8', bg:'#EFF6FF'},
+  Martes:    {top:'#7C3AED', bg:'#F5F3FF'},
+  Miercoles: {top:'#0D9488', bg:'#F0FDFA'},
+  Jueves:    {top:'#D97706', bg:'#FFFBEB'},
+  Viernes:   {top:'#DB2777', bg:'#FDF2F8'}
+};
+function escHtml(s){
+  return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+// Texto del plato elegido por `t` el día `d` (o "Ninguno (Ausente)").
+function platoDePersonaEnDia(t, d){
+  const p = d.pedidos.find(x=>normRut(x.rut)===normRut(t.rut));
+  if(!p) return null;
+  const m = d.opciones.find(o=>String(o.opcion)===String(p.opcion));
+  return (m && m.descripcion && String(m.descripcion).trim()) ? m.descripcion : 'Colación';
+}
+function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
+  const totalColaciones = diasInfo.reduce((s,d)=>s+d.pedidos.length,0);
+  const rutsAnotados = new Set();
+  diasInfo.forEach(d=>d.pedidos.forEach(p=>rutsAnotados.add(normRut(p.rut))));
+  const anotados = elegibles.filter(t=>rutsAnotados.has(normRut(t.rut))).length;
+  const noAnotados = Math.max(0, elegibles.length - anotados);
+  const desgloses = diasInfo.map(d=>desgloseDiaSodexo(d.pedidos, d.opciones));
+  const totalColacionGenerica = desgloses.reduce((s,x)=>s+x.colacion,0);
+
+  const tarjetasDias = diasInfo.map((d,i)=>{
+    const col = COLOR_SODEXO[d.dia] || COLOR_SODEXO.Lunes;
+    const desg = desgloses[i];
+    const full = (diasInfo.length%2===1 && i===diasInfo.length-1) ? "style='grid-column:1 / -1'" : '';
+    const filasPlato = desg.platos.map(([nombre,qty])=>
+      `<div class="plato-row"><span class="nombre">${escHtml(nombre)}</span><span class="qty" style="background:${col.top}">${qty}</span></div>`).join('');
+    const filaColacion = desg.colacion ? `<div class="plato-row"><span class="nombre colacion-line">🌟 Colación (sin plato asignado)</span><span class="qty" style="background:#B45309">${desg.colacion}</span></div>` : '';
+    return `<div class="card" ${full}>
+      <div class="top" style="background:${col.top}"><span class="dia">${escHtml(d.dia)}</span><span class="fecha">${escHtml(d.label)}</span></div>
+      <div class="body">${filasPlato}${filaColacion}
+        <div class="total-dia" style="background:${col.bg};color:${col.top}"><span>Total ${escHtml(d.dia.toLowerCase())}</span><span>${desg.totalDia}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const paginasDias = diasInfo.map(d=>{
+    const col = COLOR_SODEXO[d.dia] || COLOR_SODEXO.Lunes;
+    const filas = elegibles.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).map((t,idx)=>{
+      const plato = platoDePersonaEnDia(t, d);
+      const celda = plato ? `<span class="pill-plato" style="background:${col.bg};color:${col.top}">${escHtml(plato)}</span>` : `<span class="ausente">Ninguno (Ausente)</span>`;
+      return `<tr><td class="n">${idx+1}</td><td class="rut">${escHtml(t.rut)}</td><td>${escHtml(t.nombre)}</td><td>${celda}</td></tr>`;
+    }).join('');
+    return `<div class="page-break">
+      <div class="page-hdr" style="background:${col.top}"><span class="tit">${escHtml(d.dia)} — Listado completo</span><span class="fecha">${escHtml(d.label)}</span></div>
+      <table class="listado"><tr><th>N°</th><th>RUT</th><th>Nombre</th><th>Plato elegido</th></tr>${filas}</table>
+    </div>`;
+  }).join('');
+
+  const headDias = diasInfo.map(d=>{
+    const col = COLOR_SODEXO[d.dia] || COLOR_SODEXO.Lunes;
+    return `<th style="background:${col.top}">${escHtml(d.label)}</th>`;
+  }).join('');
+  const filasGeneral = elegibles.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).map(t=>{
+    const celdas = diasInfo.map(d=>{
+      const plato = platoDePersonaEnDia(t, d);
+      return plato ? `<td>${escHtml(plato)}</td>` : `<td class="ausente">Ninguno (Ausente)</td>`;
+    }).join('');
+    return `<tr><td>${escHtml(t.nombre)}</td>${celdas}</tr>`;
+  }).join('');
+  const totalesGeneral = diasInfo.map((d,i)=>`<td>${desgloses[i].totalDia}</td>`).join('');
+
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Reporte Sodexo</title><style>
+  @page { size: A4; margin: 12mm 14mm; }
+  *{box-sizing:border-box}
+  body{font-family:'Segoe UI',Arial,Helvetica,sans-serif;color:#1E293B;margin:0;font-size:12px;line-height:1.35;background:#fff}
+  .hdr{display:flex;align-items:center;justify-content:space-between;gap:14px;background:linear-gradient(135deg,#1D4ED8,#1E293B);color:#fff;border-radius:14px;padding:16px 20px;margin-bottom:14px}
+  .hdr .left{display:flex;align-items:center;gap:12px}
+  .hdr .icon{width:42px;height:42px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:20px;flex:none;border:1.5px solid rgba(255,255,255,.5)}
+  .hdr h1{font-size:18px;margin:0 0 2px}
+  .hdr .sub{font-size:11.5px;color:rgba(255,255,255,.88)}
+  .hdr .right{text-align:right;font-size:11px;color:rgba(255,255,255,.85)}
+  .hdr .right b{display:block;font-size:13px;color:#fff}
+  .stat-row{display:flex;gap:10px;margin-bottom:16px}
+  .stat{flex:1;border-radius:12px;padding:12px 10px;text-align:center;border:1px solid #E2E8F0;background:#F8FAFC}
+  .stat .n{font-size:22px;font-weight:800;line-height:1}
+  .stat .l{font-size:10px;color:#64748B;text-transform:uppercase;letter-spacing:.3px;margin-top:4px}
+  .stat.tot{border-color:#BFDBFE;background:#EFF6FF}.stat.tot .n{color:#1D4ED8}
+  .stat.ok{border-color:#BBF7D0;background:#F0FDF4}.stat.ok .n{color:#15803D}
+  .stat.no{border-color:#FECACA;background:#FEF2F2}.stat.no .n{color:#DC2626}
+  .stat.col{border-color:#FDE68A;background:#FFFBEB}.stat.col .n{color:#B45309}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .card{border-radius:14px;padding:0;overflow:hidden;border:1px solid #E2E8F0;break-inside:avoid}
+  .card .top{padding:10px 14px;color:#fff;display:flex;justify-content:space-between;align-items:baseline}
+  .card .top .dia{font-size:13.5px;font-weight:800;text-transform:uppercase;letter-spacing:.3px}
+  .card .top .fecha{font-size:10.5px;opacity:.9}
+  .card .body{padding:10px 14px 12px}
+  .plato-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed #E2E8F0;font-size:11.5px}
+  .plato-row:last-of-type{border-bottom:none}
+  .plato-row .nombre{color:#334155}
+  .plato-row .qty{font-weight:800;min-width:22px;text-align:center;border-radius:20px;padding:1px 8px;font-size:11px;color:#fff;flex:none}
+  .total-dia{margin-top:8px;padding:7px 10px;border-radius:8px;font-weight:800;font-size:12px;display:flex;justify-content:space-between;align-items:center}
+  .colacion-line{color:#B45309;font-weight:700}
+  .foot{margin-top:14px;text-align:center;color:#94A3B8;font-size:9.5px;border-top:1px solid #E2E8F0;padding-top:6px}
+  .page-break{page-break-before:always}
+  .page-hdr{display:flex;align-items:center;justify-content:space-between;gap:14px;color:#fff;border-radius:12px;padding:12px 18px;margin-bottom:14px}
+  .page-hdr .tit{font-size:16px;font-weight:800;text-transform:uppercase;letter-spacing:.3px}
+  .page-hdr .fecha{font-size:11.5px;opacity:.9}
+  table.listado{width:100%;border-collapse:collapse;font-size:11px}
+  table.listado th{text-align:left;padding:7px 8px;font-size:9.5px;text-transform:uppercase;letter-spacing:.3px;color:#475569;border-bottom:2px solid #E2E8F0}
+  table.listado td{padding:6px 8px;border-bottom:1px solid #EEF2F6}
+  table.listado tr:nth-child(even) td{background:#F8FAFC}
+  table.listado td.n{color:#94A3B8;width:26px}
+  table.listado td.rut{color:#64748B;white-space:nowrap}
+  table.listado .ausente{color:#B0B8C4;font-style:italic}
+  table.listado .pill-plato{display:inline-block;padding:2px 9px;border-radius:20px;font-size:10.5px;font-weight:700}
+  table.general{width:100%;border-collapse:collapse;font-size:9.8px}
+  table.general th{padding:6px 5px;font-size:9px;text-transform:uppercase;color:#fff;text-align:left;letter-spacing:.2px}
+  table.general th.nombre-col{background:#1E293B}
+  table.general td{padding:5px;border-bottom:1px solid #EEF2F6}
+  table.general tr:nth-child(even) td{background:#F8FAFC}
+  table.general td.ausente{color:#C7CDD6;font-style:italic}
+  table.general tfoot td{font-weight:800;border-top:2px solid #CBD5E1;border-bottom:none;padding-top:7px}
+  </style></head><body>
+  <div class="hdr">
+    <div class="left"><div class="icon">🍽️</div><div><h1>Reporte Sodexo</h1><div class="sub">${escHtml(nombreSitio)}${nombreSitio?' · ':''}${escHtml(subtitulo)}</div></div></div>
+    <div class="right">Generado el ${escHtml(fmtFechaCorta(iso(new Date())))}<b>Colaciones Semanales</b></div>
+  </div>
+  <div class="stat-row">
+    <div class="stat tot"><div class="n">${totalColaciones}</div><div class="l">Colaciones en el periodo</div></div>
+    <div class="stat ok"><div class="n">${anotados}</div><div class="l">Trabajadores anotados</div></div>
+    <div class="stat no"><div class="n">${noAnotados}</div><div class="l">Sin anotarse</div></div>
+    <div class="stat col"><div class="n">${totalColacionGenerica}</div><div class="l">🌟 Colación genérica</div></div>
+  </div>
+  <div class="grid">${tarjetasDias}</div>
+  <div class="foot">Reporte Sodexo — generado automáticamente desde Colaciones Semanales, solo para uso de la empresa de colaciones.</div>
+  ${paginasDias}
+  <div class="page-break">
+    <div class="page-hdr" style="background:linear-gradient(135deg,#1D4ED8,#1E293B)"><span class="tit">Total general</span><span class="fecha">${escHtml(subtitulo)}</span></div>
+    <div class="stat-row">
+      <div class="stat tot"><div class="n">${totalColaciones}</div><div class="l">Colaciones en el periodo</div></div>
+      <div class="stat ok"><div class="n">${anotados}</div><div class="l">Trabajadores anotados</div></div>
+      <div class="stat no"><div class="n">${noAnotados}</div><div class="l">Sin anotarse</div></div>
+      <div class="stat col"><div class="n">${totalColacionGenerica}</div><div class="l">🌟 Colación genérica</div></div>
+    </div>
+    <table class="general"><thead><tr><th class="nombre-col">Nombre</th>${headDias}</tr></thead>
+    <tbody>${filasGeneral}</tbody>
+    <tfoot><tr><td>Total del día</td>${totalesGeneral}</tr></tfoot></table>
+  </div>
+  </body></html>`;
+}
+function abrirReporteSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
+  if(!diasInfo.length){ alert('No hay menús publicados para generar el reporte.'); return; }
+  const html = generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles);
+  const ventana = window.open('', '_blank');
+  if(!ventana){ alert('El navegador bloqueó la ventana nueva. Permite ventanas emergentes para generar el PDF.'); return; }
+  ventana.document.open();
+  ventana.document.write(html);
+  ventana.document.close();
+  setTimeout(()=>{ try{ ventana.focus(); ventana.print(); }catch(e){} }, 300);
 }
 // Exporta un solo .xlsx con 4 hojas: resumen a gran escala (por opción),
 // desglose por nombre de plato, y el registro de personas (anotados y sin
@@ -1602,9 +1775,16 @@ function renderAdminPeriodo(){
   btnPdf.onclick = ()=>window.print();
   const btnXls = el('button',{class:'btn'},'⬇️ Exportar Excel');
   btnXls.onclick = ()=>exportarExcelPeriodo(state.periodoDesde, state.periodoHasta, datosPorSemana, listaFaltas);
+  const diasInfoSodexoPer = diasInfoSodexoPeriodo(datosPorSemana);
+  const elegiblesUnicosPer = elegiblesUnicosPeriodo(datosPorSemana);
+  const nombreSitioPer = state.data.config.nombre_sitio||'';
   const btnSodexo = el('button',{class:'btn'},'🍽️ Reporte Sodexo (Excel)');
-  btnSodexo.onclick = ()=>exportarSodexoPeriodo(datosPorSemana, state.data.trabajadores, state.data.config.nombre_sitio||'');
-  toolbar.append(btnPdf, btnXls, btnSodexo);
+  btnSodexo.disabled = !diasInfoSodexoPer.length;
+  btnSodexo.onclick = ()=>exportarSodexoPeriodo(diasInfoSodexoPer, elegiblesUnicosPer, state.data.trabajadores, nombreSitioPer);
+  const btnSodexoPdf = el('button',{class:'btn'},'🎨 Reporte Sodexo (PDF)');
+  btnSodexoPdf.disabled = !diasInfoSodexoPer.length;
+  btnSodexoPdf.onclick = ()=>abrirReporteSodexoPDF(nombreSitioPer, `${fmtFechaCorta(state.periodoDesde)} al ${fmtFechaCorta(state.periodoHasta)}`, diasInfoSodexoPer, elegiblesUnicosPer);
+  toolbar.append(btnPdf, btnXls, btnSodexo, btnSodexoPdf);
   box.appendChild(toolbar);
 
   const stats = el('div',{class:'stat-row'});
