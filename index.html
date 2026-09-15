@@ -653,8 +653,24 @@ function buildCierreConfigBody(card){
   row.append(fFecha, fHora, btnGuardar, msgBox);
   card.appendChild(row);
   const dias = Number(state.data.config.cierre_dias_antes ?? 5);
-  card.appendChild(el('div',{style:'font-size:12.5px;color:var(--t2)'},
+  card.appendChild(el('div',{style:'font-size:12.5px;color:var(--t2);margin-bottom:14px'},
     `La fecha de arriba es la del cierre para la semana que estás viendo (${fmtSemana(state.semanaRef)}). Esa misma cantidad de días antes del lunes (${dias} día${dias===1?'':'s'}) se aplica automáticamente a todas las demás semanas. Después del cierre, los trabajadores ya no pueden elegir ni cambiar su opción; solo administración puede seguir editando pedidos de esa semana.`));
+
+  const rowSitio = el('div',{class:'row',style:'align-items:flex-end'});
+  const fSitio = el('div',{class:'field'});
+  fSitio.appendChild(el('label',{},'Nombre del sitio (aparece arriba en el Reporte Sodexo)'));
+  const inpSitio = el('input',{type:'text',value:state.data.config.nombre_sitio||'',placeholder:'Ej: ARENAL'});
+  fSitio.appendChild(inpSitio);
+  const btnGuardarSitio = el('button',{class:'btn sm',style:'margin-bottom:12px'},'Guardar');
+  btnGuardarSitio.onclick = async ()=>{
+    btnGuardarSitio.disabled = true;
+    const res = await callApi({action:'guardarConfig', clave:'nombre_sitio', valor:inpSitio.value.trim()});
+    btnGuardarSitio.disabled = false;
+    if(res.ok){ state.data.config.nombre_sitio = inpSitio.value.trim(); btnGuardarSitio.textContent='✓'; setTimeout(()=>btnGuardarSitio.textContent='Guardar',1000); }
+    else alert(res.error||'Error');
+  };
+  rowSitio.append(fSitio, btnGuardarSitio);
+  card.appendChild(rowSitio);
 }
 function buildCatalogoPlatosBody(card){
   card.appendChild(el('div',{style:'font-size:12.5px;color:var(--t2);margin-bottom:10px'},
@@ -1020,12 +1036,16 @@ function renderAdminReportes(){
   const {menusSemana, pedidosSemana, elegibles, anotados, noAnotados, diasEspeciales} = sd;
   const anotadosEnEspeciales = sd.pedidosEspeciales;
 
+  const diasConMenuSodexo = DIAS.filter(d=>menusSemana.some(m=>m.dia===d));
   const toolbar = el('div',{class:'toolbar no-print'});
   const btnPdf = el('button',{class:'btn'},'📄 Exportar / imprimir PDF');
   btnPdf.onclick = ()=>window.print();
   const btnXls = el('button',{class:'btn'},'⬇️ Exportar Excel');
   btnXls.onclick = ()=>exportarExcel(semana, anotados, noAnotados, pedidosSemana, menusSemana, diasEspeciales);
-  toolbar.append(btnPdf, btnXls);
+  const btnSodexo = el('button',{class:'btn'},'🍽️ Reporte Sodexo (Excel)');
+  btnSodexo.disabled = !diasConMenuSodexo.length;
+  btnSodexo.onclick = ()=>exportarSodexo(semana, diasConMenuSodexo, pedidosSemana, state.data.trabajadores, state.data.config.nombre_sitio||'');
+  toolbar.append(btnPdf, btnXls, btnSodexo);
   box.appendChild(toolbar);
 
   const stats = el('div',{class:'stat-row'});
@@ -1301,6 +1321,58 @@ function renderEditorPedido(persona, pedidosSemana, dias, menusPorDia, semana){
   modal.appendChild(body);
   return modal;
 }
+// Arma las filas NR | RUT | NOMBRE (con el nombre del sitio arriba, si esta
+// configurado) para un dia puntual: el formato que pide Sodexo para saber a
+// quienes hay que facturarles/prepararles colacion ese dia.
+function filasSodexoDia(pedidosDia, trabajadores, nombreSitio){
+  const filas = [];
+  if(nombreSitio) filas.push([nombreSitio]);
+  filas.push(['NR','RUT','NOMBRE']);
+  pedidosDia
+    .map(p=>trabajadores.find(t=>normRut(t.rut)===normRut(p.rut)))
+    .filter(Boolean)
+    .sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre)))
+    .forEach((t,idx)=>filas.push([idx+1, t.rut, t.nombre]));
+  return filas;
+}
+// Nombre de hoja de Excel valido: maximo 31 caracteres, sin \/?*[]:  y sin
+// repetirse dentro del mismo libro.
+function nombreHojaUnico(base, usados){
+  let limpio = String(base).replace(/[\\/?*[\]:]/g,'').slice(0,31) || 'Hoja';
+  let nombre = limpio, n = 2;
+  while(usados.has(nombre)){ nombre = (limpio.slice(0,28)+' '+n).slice(0,31); n++; }
+  usados.add(nombre);
+  return nombre;
+}
+// Reporte Sodexo de una semana: una hoja por dia con menu publicado, cada
+// una con la lista de quienes se anotaron ese dia (para la empresa de
+// colaciones, no para uso interno).
+function exportarSodexo(semana, diasConMenu, pedidosSemana, trabajadores, nombreSitio){
+  const wb = XLSX.utils.book_new();
+  const usados = new Set();
+  diasConMenu.forEach(dia=>{
+    const pedidosDia = pedidosSemana.filter(p=>p.dia===dia);
+    const filas = filasSodexoDia(pedidosDia, trabajadores, nombreSitio);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filas), nombreHojaUnico(dia, usados));
+  });
+  XLSX.writeFile(wb, `reporte_sodexo_${semana}.xlsx`);
+}
+// Reporte Sodexo de un periodo: una hoja por cada dia con menu publicado de
+// cada semana del rango (fecha + dia en el nombre de la hoja).
+function exportarSodexoPeriodo(datosPorSemana, trabajadores, nombreSitio){
+  const wb = XLSX.utils.book_new();
+  const usados = new Set();
+  datosPorSemana.forEach(d=>{
+    const diasConMenu = DIAS.filter(dia=>d.menusSemana.some(m=>m.dia===dia));
+    diasConMenu.forEach(dia=>{
+      const pedidosDia = d.pedidosSemana.filter(p=>p.dia===dia);
+      const filas = filasSodexoDia(pedidosDia, trabajadores, nombreSitio);
+      const fecha = fechaDia(new Date(d.semana+'T00:00:00'), dia).split('-').reverse().join('-');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filas), nombreHojaUnico(`${fecha} ${dia.slice(0,3)}`, usados));
+    });
+  });
+  XLSX.writeFile(wb, `reporte_sodexo_periodo.xlsx`);
+}
 // Exporta un solo .xlsx con 4 hojas: resumen a gran escala (por opción),
 // desglose por nombre de plato, y el registro de personas (anotados y sin
 // anotarse) cada uno en su propia hoja.
@@ -1433,7 +1505,9 @@ function renderAdminPeriodo(){
   btnPdf.onclick = ()=>window.print();
   const btnXls = el('button',{class:'btn'},'⬇️ Exportar Excel');
   btnXls.onclick = ()=>exportarExcelPeriodo(state.periodoDesde, state.periodoHasta, datosPorSemana, listaFaltas);
-  toolbar.append(btnPdf, btnXls);
+  const btnSodexo = el('button',{class:'btn'},'🍽️ Reporte Sodexo (Excel)');
+  btnSodexo.onclick = ()=>exportarSodexoPeriodo(datosPorSemana, state.data.trabajadores, state.data.config.nombre_sitio||'');
+  toolbar.append(btnPdf, btnXls, btnSodexo);
   box.appendChild(toolbar);
 
   const stats = el('div',{class:'stat-row'});
