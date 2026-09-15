@@ -162,6 +162,9 @@ tr:hover td{background:var(--bg2)}
 .stat .l{font-size:11px;color:var(--t2);text-transform:uppercase}
 .stat.ok .n{color:var(--gr3)}
 .stat.no .n{color:var(--red)}
+.charts-wrap{display:flex;gap:18px;flex-wrap:wrap}
+.chart-col{flex:1;min-width:230px;text-align:center}
+.chart-label{font-size:11.5px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.3px;margin-bottom:8px}
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 @media print{
   .no-print{display:none!important}
@@ -1036,6 +1039,10 @@ function renderAdminReportes(){
     return box;
   }
 
+  const diasConMenuChart = DIAS.filter(d=>menusSemana.some(m=>m.dia===d));
+  const barItemsSemana = diasConMenuChart.map(d=>({label:d.slice(0,3), value: pedidosSemana.filter(p=>p.dia===d).length}));
+  box.appendChild(chartsCard('Colaciones por día', barItemsSemana, anotados.length, noAnotados.length, 'Anotados', 'Sin anotarse'));
+
   const resumenCard = el('div',{class:'card'});
   resumenCard.appendChild(el('h2',{},'Resumen de opciones elegidas por día'));
   const twrap = el('div',{class:'tbl-wrap'});
@@ -1109,6 +1116,106 @@ function renderAdminReportes(){
 }
 function statBox(n,label,cls){
   return el('div',{class:'stat '+(cls||'')}, el('div',{class:'n'},String(n)), el('div',{class:'l'},label));
+}
+// Grafico de barras simple en SVG puro (sin librerias externas): una barra
+// por item, altura proporcional al maximo del set.
+function svgBarras(items){
+  const ns = 'http://www.w3.org/2000/svg';
+  const w = 320, h = 150, padTop = 22, padBottom = 24;
+  const max = Math.max(1, ...items.map(i=>i.value));
+  const barW = (w - 16) / (items.length || 1);
+  const svg = document.createElementNS(ns,'svg');
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('width','100%');
+  svg.setAttribute('style', `max-width:${w}px;display:block;margin:0 auto`);
+  items.forEach((it,i)=>{
+    const bh = Math.round((h-padTop-padBottom) * (it.value/max));
+    const x = 8 + i*barW;
+    const y = h - padBottom - bh;
+    const rect = document.createElementNS(ns,'rect');
+    rect.setAttribute('x', x + barW*0.18);
+    rect.setAttribute('y', y);
+    rect.setAttribute('width', barW*0.64);
+    rect.setAttribute('height', Math.max(bh,1));
+    rect.setAttribute('rx','4');
+    rect.setAttribute('fill','var(--blue)');
+    svg.appendChild(rect);
+    const val = document.createElementNS(ns,'text');
+    val.setAttribute('x', x + barW/2);
+    val.setAttribute('y', Math.max(y-5, padTop-6));
+    val.setAttribute('text-anchor','middle');
+    val.setAttribute('font-size','11');
+    val.setAttribute('font-weight','800');
+    val.setAttribute('fill','var(--t1)');
+    val.textContent = String(it.value);
+    svg.appendChild(val);
+    const lbl = document.createElementNS(ns,'text');
+    lbl.setAttribute('x', x + barW/2);
+    lbl.setAttribute('y', h-7);
+    lbl.setAttribute('text-anchor','middle');
+    lbl.setAttribute('font-size','10.5');
+    lbl.setAttribute('fill','var(--t2)');
+    lbl.textContent = it.label;
+    svg.appendChild(lbl);
+  });
+  return svg;
+}
+// Grafico de torta (donut) en SVG puro: un solo anillo, porcentaje "ok" en
+// verde y el resto en rojo, con el numero grande al centro.
+function svgDonut(pctOk){
+  const ns = 'http://www.w3.org/2000/svg';
+  const size=110, r=42, c=size/2, stroke=15;
+  const circ = 2*Math.PI*r;
+  const svg = document.createElementNS(ns,'svg');
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+  svg.setAttribute('width','110'); svg.setAttribute('height','110');
+  const bg = document.createElementNS(ns,'circle');
+  bg.setAttribute('cx',c); bg.setAttribute('cy',c); bg.setAttribute('r',r);
+  bg.setAttribute('fill','none'); bg.setAttribute('stroke','var(--red)'); bg.setAttribute('stroke-width',stroke);
+  svg.appendChild(bg);
+  const seg = document.createElementNS(ns,'circle');
+  seg.setAttribute('cx',c); seg.setAttribute('cy',c); seg.setAttribute('r',r);
+  seg.setAttribute('fill','none'); seg.setAttribute('stroke','var(--green)'); seg.setAttribute('stroke-width',stroke);
+  seg.setAttribute('stroke-dasharray', `${circ*pctOk/100} ${circ}`);
+  seg.setAttribute('stroke-linecap','round');
+  seg.setAttribute('transform',`rotate(-90 ${c} ${c})`);
+  svg.appendChild(seg);
+  const txt = document.createElementNS(ns,'text');
+  txt.setAttribute('x',c); txt.setAttribute('y',c+6);
+  txt.setAttribute('text-anchor','middle'); txt.setAttribute('font-size','19'); txt.setAttribute('font-weight','800'); txt.setAttribute('fill','var(--t1)');
+  txt.textContent = Math.round(pctOk)+'%';
+  svg.appendChild(txt);
+  return svg;
+}
+function legendItem(color, text){
+  const it = el('div',{style:'display:flex;align-items:center;gap:6px;font-size:12px;color:var(--t2);margin-bottom:4px'});
+  it.appendChild(el('span',{style:`width:10px;height:10px;border-radius:3px;background:${color};display:inline-block;flex:none`}));
+  it.appendChild(document.createTextNode(text));
+  return it;
+}
+// Tarjeta con las dos vistas simples que pidio el admin: barras de
+// colaciones por dia y una torta de anotados vs sin anotarse.
+function chartsCard(tituloBarras, barItems, okN, noN, okLabel, noLabel){
+  const card = el('div',{class:'card no-print-charts'});
+  card.appendChild(el('h2',{},'📊 Resumen visual'));
+  const wrap = el('div',{class:'charts-wrap'});
+  const colBar = el('div',{class:'chart-col'});
+  colBar.appendChild(el('div',{class:'chart-label'}, tituloBarras));
+  colBar.appendChild(svgBarras(barItems));
+  const colDonut = el('div',{class:'chart-col'});
+  const total = okN + noN;
+  const pct = total ? (okN/total*100) : 0;
+  const donutWrap = el('div',{style:'display:flex;align-items:center;gap:14px;justify-content:center;flex-wrap:wrap'});
+  donutWrap.appendChild(svgDonut(pct));
+  const legend = el('div',{});
+  legend.appendChild(legendItem('var(--green)', `${okLabel}: ${okN} (${Math.round(pct)}%)`));
+  legend.appendChild(legendItem('var(--red)', `${noLabel}: ${noN} (${Math.round(100-pct)}%)`));
+  donutWrap.appendChild(legend);
+  colDonut.appendChild(el('div',{class:'chart-label'}, `${okLabel} vs ${noLabel}`));
+  colDonut.appendChild(donutWrap);
+  wrap.append(colBar, colDonut);
+  card.appendChild(wrap);
+  return card;
 }
 // Lista de trabajadores de solo lectura (texto plano, imprime bien). Cada
 // fila tiene un botón "✏️" para abrir el panel de edición de esa persona
@@ -1333,6 +1440,12 @@ function renderAdminPeriodo(){
   stats.appendChild(statBox(totalAnotados,'Anotados (suma semanas)','ok'));
   stats.appendChild(statBox(totalNoAnotados,'Sin anotarse (suma semanas)','no'));
   box.appendChild(stats);
+
+  const porDiaAgg = {};
+  DIAS.forEach(d=>{ porDiaAgg[d] = 0; });
+  datosPorSemana.forEach(d=>{ d.pedidosSemana.forEach(p=>{ porDiaAgg[p.dia] = (porDiaAgg[p.dia]||0)+1; }); });
+  const barItemsPeriodo = DIAS.map(d=>({label:d.slice(0,3), value: porDiaAgg[d]||0}));
+  box.appendChild(chartsCard('Colaciones por día (todo el periodo)', barItemsPeriodo, totalAnotados, totalNoAnotados, 'Anotados', 'Sin anotarse'));
 
   const detalleCard = el('div',{class:'card'});
   detalleCard.appendChild(el('h2',{},'Detalle por semana'));
