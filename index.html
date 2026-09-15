@@ -1511,7 +1511,7 @@ function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
   const anotados = elegibles.filter(t=>rutsAnotados.has(normRut(t.rut))).length;
   const noAnotados = Math.max(0, elegibles.length - anotados);
   const desgloses = diasInfo.map(d=>desgloseDiaSodexo(d.pedidos, d.opciones));
-  const totalColacionGenerica = desgloses.reduce((s,x)=>s+x.colacion,0);
+  const totalMejoradas = diasInfo.reduce((s,d)=>s+(esDiaEspecial(d.opciones)?d.pedidos.length:0),0);
 
   const tarjetasDias = diasInfo.map((d,i)=>{
     const col = COLOR_SODEXO[d.dia] || COLOR_SODEXO.Lunes;
@@ -1614,7 +1614,7 @@ function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
     <div class="stat tot"><div class="n">${totalColaciones}</div><div class="l">Colaciones en el periodo</div></div>
     <div class="stat ok"><div class="n">${anotados}</div><div class="l">Trabajadores anotados</div></div>
     <div class="stat no"><div class="n">${noAnotados}</div><div class="l">Sin anotarse</div></div>
-    <div class="stat col"><div class="n">${totalColacionGenerica}</div><div class="l">🌟 Colación genérica</div></div>
+    <div class="stat col"><div class="n">${totalMejoradas}</div><div class="l">🌟 Almuerzo mejorado</div></div>
   </div>
   <div class="grid">${tarjetasDias}</div>
   <div class="foot">Reporte Sodexo — generado automáticamente desde Colaciones Semanales, solo para uso de la empresa de colaciones.</div>
@@ -1625,7 +1625,7 @@ function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
       <div class="stat tot"><div class="n">${totalColaciones}</div><div class="l">Colaciones en el periodo</div></div>
       <div class="stat ok"><div class="n">${anotados}</div><div class="l">Trabajadores anotados</div></div>
       <div class="stat no"><div class="n">${noAnotados}</div><div class="l">Sin anotarse</div></div>
-      <div class="stat col"><div class="n">${totalColacionGenerica}</div><div class="l">🌟 Colación genérica</div></div>
+      <div class="stat col"><div class="n">${totalMejoradas}</div><div class="l">🌟 Almuerzo mejorado</div></div>
     </div>
     <table class="general"><thead><tr><th class="nombre-col">Nombre</th>${headDias}</tr></thead>
     <tbody>${filasGeneral}</tbody>
