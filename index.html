@@ -1040,6 +1040,16 @@ function renderAdminReportes(){
   const diasConMenuSodexo = DIAS.filter(d=>menusSemana.some(m=>m.dia===d));
   const diasInfoSodexo = diasInfoSodexoSemana(diasConMenuSodexo, pedidosSemana, menusSemana, state.semanaRef);
   const nombreSitio = state.data.config.nombre_sitio||'';
+  // Para el recordatorio: por persona, qué días (de los que tienen menú
+  // publicado) todavía no tiene ninguna opción elegida — incluye a quien
+  // respondió algunos días pero no todos (ej. lunes a miércoles sí, jueves y
+  // viernes no), no solo a quien nunca entró.
+  const noAnotadosPorDia = elegibles.map(t=>{
+    const diasFaltantes = diasConMenuSodexo.filter(d=>!pedidosSemana.some(p=>normRut(p.rut)===normRut(t.rut) && p.dia===d));
+    return Object.assign({}, t, {diasFaltantes});
+  }).filter(t=>t.diasFaltantes.length>0)
+    .sort((a,b)=> b.diasFaltantes.length - a.diasFaltantes.length || String(a.nombre).localeCompare(String(b.nombre)));
+  const extraInfoDias = t => `${t.diasFaltantes.length} día${t.diasFaltantes.length===1?'':'s'}: ${t.diasFaltantes.join(', ')}`;
   const toolbar = el('div',{class:'toolbar no-print'});
   const btnPdf = el('button',{class:'btn'},'📄 Exportar / imprimir PDF');
   btnPdf.onclick = ()=>window.print();
@@ -1052,9 +1062,9 @@ function renderAdminReportes(){
   btnSodexoPdf.disabled = !diasConMenuSodexo.length;
   btnSodexoPdf.onclick = ()=>abrirReporteSodexoPDF(nombreSitio, `Semana del ${fmtSemana(state.semanaRef)}`, diasInfoSodexo, elegibles);
   const btnNoAnotadosPdf = el('button',{class:'btn danger'},`⚠️ No anotados (PDF)`);
-  btnNoAnotadosPdf.onclick = ()=>abrirReporteNoAnotadosPDF(nombreSitio, `Semana del ${fmtSemana(state.semanaRef)}`, noAnotados);
+  btnNoAnotadosPdf.onclick = ()=>abrirReporteNoAnotadosPDF(nombreSitio, `Semana del ${fmtSemana(state.semanaRef)}`, noAnotadosPorDia, extraInfoDias, 'Días sin responder');
   const btnNoAnotadosXls = el('button',{class:'btn danger'},`⚠️ No anotados (Excel)`);
-  btnNoAnotadosXls.onclick = ()=>exportarNoAnotadosExcel(`no_anotados_${semana}.xlsx`, nombreSitio, `Semana del ${fmtSemana(state.semanaRef)}`, noAnotados);
+  btnNoAnotadosXls.onclick = ()=>exportarNoAnotadosExcel(`no_anotados_${semana}.xlsx`, nombreSitio, `Semana del ${fmtSemana(state.semanaRef)}`, noAnotadosPorDia, extraInfoDias, 'Días sin responder');
   toolbar.append(btnPdf, btnXls, btnSodexo, btnSodexoPdf, btnNoAnotadosPdf, btnNoAnotadosXls);
   box.appendChild(toolbar);
 
@@ -1658,7 +1668,7 @@ function abrirReporteSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
 // decir ni siquiera entraron a la app) — pensado para copiar/enviar a esas
 // personas, separado del reporte completo. No incluye a quienes sí
 // entraron y eligieron "Ninguno (Ausente)": esos ya respondieron.
-function generarHtmlNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo){
+function generarHtmlNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo, extraTitulo){
   const lista = noAnotados.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre)));
   const filas = lista.map((t,idx)=>`<tr><td class="n">${idx+1}</td><td>${escHtml(t.nombre)}${t.tipo==='Spot'?' 🔸':''}</td><td class="rut">${escHtml(t.rut)}</td><td>${escHtml(extraInfo ? extraInfo(t) : '')}</td></tr>`).join('');
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>No anotados</title><style>
@@ -1682,14 +1692,14 @@ function generarHtmlNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo)
   <div class="hdr">
     <div class="left"><div class="icon">⚠️</div><div><h1>Recordatorio: aún no se anotan</h1><div class="sub">${escHtml(nombreSitio)}${nombreSitio?' · ':''}${escHtml(subtitulo)}</div></div></div>
   </div>
-  <div class="callout">${lista.length===1?'Esta 1 persona no tiene':`Estas ${lista.length} personas no tienen`} ninguna elección registrada (ni siquiera "Ninguno") — probablemente no ${lista.length===1?'ha':'han'} entrado a la app. Recuérdale${lista.length===1?'':'s'} anotarse antes del cierre.</div>
-  <table><tr><th>N°</th><th>Nombre</th><th>RUT</th><th>${extraInfo?'Detalle':''}</th></tr>${filas}</table>
+  <div class="callout">${lista.length===1?'Esta 1 persona tiene':`Estas ${lista.length} personas tienen`} pendiente completar su elección (ni siquiera "Ninguno") — revisa el detalle abajo y recuérdale${lista.length===1?'':'s'} anotarse antes del cierre.</div>
+  <table><tr><th>N°</th><th>Nombre</th><th>RUT</th><th>${extraTitulo ? escHtml(extraTitulo) : ''}</th></tr>${filas}</table>
   <div class="foot">Generado desde Colaciones Semanales — ${escHtml(fmtFechaCorta(iso(new Date())))}</div>
   </body></html>`;
 }
-function abrirReporteNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo){
+function abrirReporteNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo, extraTitulo){
   if(!noAnotados.length){ alert('Nadie falta por anotarse 🎉'); return; }
-  abrirVentanaHtmlParaImprimir(generarHtmlNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo));
+  abrirVentanaHtmlParaImprimir(generarHtmlNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo, extraTitulo));
 }
 function exportarNoAnotadosExcel(nombreArchivo, nombreSitio, subtitulo, noAnotados, extraInfo, extraTitulo){
   if(!noAnotados.length){ alert('Nadie falta por anotarse 🎉'); return; }
@@ -1854,7 +1864,7 @@ function renderAdminPeriodo(){
   const subtituloPer = `${fmtFechaCorta(state.periodoDesde)} al ${fmtFechaCorta(state.periodoHasta)}`;
   const extraInfoFaltas = f => `${f.semanas.length} de ${conMenu.length} semana${conMenu.length===1?'':'s'}`;
   const btnNoAnotadosPdf = el('button',{class:'btn danger'},'⚠️ No anotados (PDF)');
-  btnNoAnotadosPdf.onclick = ()=>abrirReporteNoAnotadosPDF(nombreSitioPer, subtituloPer, listaFaltas, extraInfoFaltas);
+  btnNoAnotadosPdf.onclick = ()=>abrirReporteNoAnotadosPDF(nombreSitioPer, subtituloPer, listaFaltas, extraInfoFaltas, 'Semanas sin anotarse');
   const btnNoAnotadosXls = el('button',{class:'btn danger'},'⚠️ No anotados (Excel)');
   btnNoAnotadosXls.onclick = ()=>exportarNoAnotadosExcel(`no_anotados_periodo_${state.periodoDesde}_a_${state.periodoHasta}.xlsx`, nombreSitioPer, subtituloPer, listaFaltas, extraInfoFaltas, 'Semanas sin anotarse');
   toolbar.append(btnPdf, btnXls, btnSodexo, btnSodexoPdf, btnNoAnotadosPdf, btnNoAnotadosXls);
