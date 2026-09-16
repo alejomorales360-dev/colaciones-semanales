@@ -86,7 +86,7 @@ const ACCIONES_SOLO_ADMIN_COL = [
   'marcarDiaEspecial', 'copiarMenuSemana', 'guardarConfig', 'eliminarPlato'
 ];
 function claveAdminValidaCol(password) {
-  const clave = String(obtenerConfigCol().admin_password || '').trim();
+  const clave = String(configCacheadoCol().admin_password || '').trim();
   return !!clave && String(password || '').trim() === clave;
 }
 function procesarAccionCol(body) {
@@ -135,6 +135,53 @@ function responderJsonpCol(data, callback) {
     return ContentService.createTextOutput(callback + '(' + json + ')').setMimeType(ContentService.MimeType.JAVASCRIPT);
   }
   return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
+}
+
+// --- CACHE (para que 50+ personas entrando a la vez no golpeen todas la
+// planilla al mismo tiempo) ---
+// Cada login/actualizacion antes hacia 3-4 lecturas completas de hojas
+// (Trabajadores, Menus, Config, Pedidos), y ese costo se repetia por cada
+// persona conectada. CacheService comparte estos resultados por unos
+// segundos entre TODAS las ejecuciones del script, asi que si 50 personas
+// entran en la misma ventana de tiempo, solo la primera paga el costo de
+// leer la hoja; el resto reutiliza el mismo resultado cacheado. Los
+// pedidos se cachean muy poco (5s) porque cambian todo el tiempo; el
+// resto un poco mas porque cambia rara vez.
+function cacheColLeer_(clave, ttlSeg, fn) {
+  const cache = CacheService.getScriptCache();
+  try {
+    const guardado = cache.get(clave);
+    if (guardado != null) return JSON.parse(guardado);
+  } catch (err) { /* cache ilegible: seguir y recalcular */ }
+  const valor = fn();
+  try { cache.put(clave, JSON.stringify(valor), ttlSeg); } catch (err) { /* valor muy grande para cachear: no es grave */ }
+  return valor;
+}
+function cacheColInvalidar_(clave) {
+  try { CacheService.getScriptCache().remove(clave); } catch (err) { /* nada que invalidar */ }
+}
+function trabajadoresCacheadosCol() { return cacheColLeer_('trabajadores', 20, () => hojaAObjetosCol(HOJAS_COL.TRABAJADORES)); }
+function menusCacheadosCol() { return cacheColLeer_('menus', 15, menusAObjetosCol); }
+function platosCacheadosCol() { return cacheColLeer_('platos', 30, listarPlatosCol); }
+function configCacheadoCol() { return cacheColLeer_('config', 20, obtenerConfigCol); }
+function pedidosCacheadosCol() { return cacheColLeer_('pedidos', 5, () => hojaAObjetosCol(HOJAS_COL.PEDIDOS)); }
+// Un solo candado para todo el script: evita que dos personas escribiendo
+// pedidos/menus al mismo tiempo se pisen (por ejemplo, dos filas para el
+// mismo dia y persona si sus peticiones se entrelazan). Con 50 personas
+// escribiendo casi a la vez esto es lo que evita datos duplicados o
+// inconsistentes, a cambio de una espera muy breve si coinciden.
+function conCandadoCol_(fn) {
+  const candado = LockService.getScriptLock();
+  try {
+    candado.waitLock(10000);
+  } catch (err) {
+    return { ok: false, error: 'El servidor está muy ocupado en este momento, intenta de nuevo en unos segundos.' };
+  }
+  try {
+    return fn();
+  } finally {
+    candado.releaseLock();
+  }
 }
 
 // --- HELPERS ---
@@ -213,11 +260,11 @@ function menusAObjetosCol() {
 function obtenerTodoCol() {
   return {
     ok: true,
-    trabajadores: hojaAObjetosCol(HOJAS_COL.TRABAJADORES),
-    menus: menusAObjetosCol(),
-    pedidos: hojaAObjetosCol(HOJAS_COL.PEDIDOS),
-    platos: listarPlatosCol(),
-    config: obtenerConfigCol(),
+    trabajadores: trabajadoresCacheadosCol(),
+    menus: menusCacheadosCol(),
+    pedidos: pedidosCacheadosCol(),
+    platos: platosCacheadosCol(),
+    config: configCacheadoCol(),
     timestamp: new Date().toISOString()
   };
 }
@@ -241,26 +288,36 @@ function obtenerConfigCol() {
 }
 function actualizarConfigCol(clave, valor) {
   if (!clave) return { ok: false, error: 'Falta la clave de configuracion' };
-  const h = getHojaCol(HOJAS_COL.CONFIG);
-  const v = h.getDataRange().getValues();
-  // Forzar formato de texto en la celda para que Sheets no reinterprete
-  // valores como "14:00" como una hora/fecha (lo que corrompia cierre_hora).
-  for (let i = 1; i < v.length; i++) {
-    if (String(v[i][0]).toLowerCase().trim() === String(clave).toLowerCase().trim()) {
-      h.getRange(i + 1, 2).setNumberFormat('@').setValue(valor);
-      return { ok: true };
+  return conCandadoCol_(() => {
+    const h = getHojaCol(HOJAS_COL.CONFIG);
+    const v = h.getDataRange().getValues();
+    // Forzar formato de texto en la celda para que Sheets no reinterprete
+    // valores como "14:00" como una hora/fecha (lo que corrompia cierre_hora).
+    let resultado;
+    let encontrado = false;
+    for (let i = 1; i < v.length; i++) {
+      if (String(v[i][0]).toLowerCase().trim() === String(clave).toLowerCase().trim()) {
+        h.getRange(i + 1, 2).setNumberFormat('@').setValue(valor);
+        resultado = { ok: true };
+        encontrado = true;
+        break;
+      }
     }
-  }
-  const fila = h.getLastRow() + 1;
-  h.getRange(fila, 1).setValue(clave);
-  h.getRange(fila, 2).setNumberFormat('@').setValue(valor);
-  return { ok: true, creado: true };
+    if (!encontrado) {
+      const fila = h.getLastRow() + 1;
+      h.getRange(fila, 1).setValue(clave);
+      h.getRange(fila, 2).setNumberFormat('@').setValue(valor);
+      resultado = { ok: true, creado: true };
+    }
+    cacheColInvalidar_('config');
+    return resultado;
+  });
 }
 // Calcula el instante (Date) en que se cierran las inscripciones de una
 // semana: "cierre_dias_antes" dias antes del lunes de esa semana, a la hora
 // "cierre_hora". Por defecto: miercoles de la semana previa a las 14:00.
 function calcularCierreCol(semana, cfg) {
-  cfg = cfg || obtenerConfigCol();
+  cfg = cfg || configCacheadoCol();
   const diasAntes = Number(cfg.cierre_dias_antes);
   const dias = isNaN(diasAntes) ? 5 : diasAntes;
   const hora = String(cfg.cierre_hora || '14:00').trim();
@@ -283,7 +340,7 @@ function inscripcionesCerradasCol(semana, cfg) {
 // administracion (evita un segundo viaje al servidor solo para cargarlos,
 // que es lo que hacia mas lento el ingreso como admin).
 function verificarLoginAdminCol(password) {
-  const cfg = obtenerConfigCol();
+  const cfg = configCacheadoCol();
   const clave = String(cfg.admin_password || '').trim();
   if (!clave) return { ok: false, error: 'No hay clave de administrador configurada (revisa la hoja Config).' };
   if (String(password || '').trim() !== clave) {
@@ -292,10 +349,10 @@ function verificarLoginAdminCol(password) {
   }
   return {
     ok: true,
-    trabajadores: hojaAObjetosCol(HOJAS_COL.TRABAJADORES),
-    menus: menusAObjetosCol(),
-    pedidos: hojaAObjetosCol(HOJAS_COL.PEDIDOS),
-    platos: listarPlatosCol(),
+    trabajadores: trabajadoresCacheadosCol(),
+    menus: menusCacheadosCol(),
+    pedidos: pedidosCacheadosCol(),
+    platos: platosCacheadosCol(),
     config: cfg
   };
 }
@@ -303,39 +360,46 @@ function verificarLoginAdminCol(password) {
 // --- TRABAJADORES ---
 function guardarTrabajadorCol(data, isEdit) {
   if (!data || !data.rut || !data.nombre) return { ok: false, error: 'Falta RUT o nombre' };
-  const h = getHojaCol(HOJAS_COL.TRABAJADORES);
-  const v = h.getDataRange().getValues();
-  const rn = normalizarRutCol(data.rut);
-  const fila = [
-    String(data.rut).trim(),
-    String(data.nombre).trim(),
-    data.tipo === 'Spot' ? 'Spot' : 'Fijo',
-    data.activo === false || data.activo === 'No' ? 'No' : 'Si',
-    data.fechaInicio || '',
-    data.fechaFin || '',
-    data.notas || ''
-  ];
-  for (let i = 1; i < v.length; i++) {
-    if (normalizarRutCol(v[i][0]) === rn) {
-      h.getRange(i + 1, 1, 1, fila.length).setValues([fila]);
-      return { ok: true, actualizado: true };
+  return conCandadoCol_(() => {
+    const h = getHojaCol(HOJAS_COL.TRABAJADORES);
+    const v = h.getDataRange().getValues();
+    const rn = normalizarRutCol(data.rut);
+    const fila = [
+      String(data.rut).trim(),
+      String(data.nombre).trim(),
+      data.tipo === 'Spot' ? 'Spot' : 'Fijo',
+      data.activo === false || data.activo === 'No' ? 'No' : 'Si',
+      data.fechaInicio || '',
+      data.fechaFin || '',
+      data.notas || ''
+    ];
+    for (let i = 1; i < v.length; i++) {
+      if (normalizarRutCol(v[i][0]) === rn) {
+        h.getRange(i + 1, 1, 1, fila.length).setValues([fila]);
+        cacheColInvalidar_('trabajadores');
+        return { ok: true, actualizado: true };
+      }
     }
-  }
-  if (isEdit) return { ok: false, error: 'Trabajador no encontrado para editar' };
-  h.appendRow(fila);
-  return { ok: true, creado: true };
+    if (isEdit) return { ok: false, error: 'Trabajador no encontrado para editar' };
+    h.appendRow(fila);
+    cacheColInvalidar_('trabajadores');
+    return { ok: true, creado: true };
+  });
 }
 function eliminarTrabajadorCol(rut) {
-  const h = getHojaCol(HOJAS_COL.TRABAJADORES);
-  const v = h.getDataRange().getValues();
-  const rn = normalizarRutCol(rut);
-  for (let i = 1; i < v.length; i++) {
-    if (normalizarRutCol(v[i][0]) === rn) {
-      h.deleteRow(i + 1);
-      return { ok: true };
+  return conCandadoCol_(() => {
+    const h = getHojaCol(HOJAS_COL.TRABAJADORES);
+    const v = h.getDataRange().getValues();
+    const rn = normalizarRutCol(rut);
+    for (let i = 1; i < v.length; i++) {
+      if (normalizarRutCol(v[i][0]) === rn) {
+        h.deleteRow(i + 1);
+        cacheColInvalidar_('trabajadores');
+        return { ok: true };
+      }
     }
-  }
-  return { ok: false, error: 'RUT no encontrado: ' + rut };
+    return { ok: false, error: 'RUT no encontrado: ' + rut };
+  });
 }
 
 // --- CATALOGO DE PLATOS ---
@@ -344,11 +408,14 @@ function eliminarTrabajadorCol(rut) {
 function guardarPlatoCol(nombre) {
   const limpio = String(nombre || '').trim();
   if (!limpio) return;
-  const h = getHojaCol(HOJAS_COL.PLATOS);
-  const v = h.getDataRange().getValues();
-  const clave = limpio.toLowerCase();
-  const yaExiste = v.slice(1).some(f => String(f[0]).trim().toLowerCase() === clave);
-  if (!yaExiste) h.appendRow([limpio]);
+  conCandadoCol_(() => {
+    const h = getHojaCol(HOJAS_COL.PLATOS);
+    const v = h.getDataRange().getValues();
+    const clave = limpio.toLowerCase();
+    const yaExiste = v.slice(1).some(f => String(f[0]).trim().toLowerCase() === clave);
+    if (!yaExiste) { h.appendRow([limpio]); cacheColInvalidar_('platos'); }
+    return null;
+  });
 }
 function listarPlatosCol() {
   try {
@@ -359,101 +426,117 @@ function listarPlatosCol() {
   }
 }
 function eliminarPlatoCol(nombre) {
-  const h = getHojaCol(HOJAS_COL.PLATOS);
-  const v = h.getDataRange().getValues();
-  const clave = String(nombre || '').trim().toLowerCase();
-  for (let i = 1; i < v.length; i++) {
-    if (String(v[i][0]).trim().toLowerCase() === clave) {
-      h.deleteRow(i + 1);
-      return { ok: true };
+  return conCandadoCol_(() => {
+    const h = getHojaCol(HOJAS_COL.PLATOS);
+    const v = h.getDataRange().getValues();
+    const clave = String(nombre || '').trim().toLowerCase();
+    for (let i = 1; i < v.length; i++) {
+      if (String(v[i][0]).trim().toLowerCase() === clave) {
+        h.deleteRow(i + 1);
+        cacheColInvalidar_('platos');
+        return { ok: true };
+      }
     }
-  }
-  return { ok: false, error: 'Plato no encontrado en el catalogo' };
+    return { ok: false, error: 'Plato no encontrado en el catalogo' };
+  });
 }
 
 // --- MENUS ---
 function guardarMenuCol(data) {
   if (!data || !data.semana || !data.dia || !data.opcion) return { ok: false, error: 'Faltan datos del menu' };
-  if (data.descripcion) guardarPlatoCol(data.descripcion);
-  const h = getHojaCol(HOJAS_COL.MENUS);
-  const v = h.getDataRange().getValues();
-  for (let i = 1; i < v.length; i++) {
-    if (mismaFechaCol(v[i][0], data.semana) &&
-        String(v[i][1]).trim() === String(data.dia).trim() &&
-        String(v[i][2]).trim() === String(data.opcion).trim()) {
-      const fila = [
-        data.semana, data.dia, data.opcion,
-        data.descripcion || '',
-        data.activo === false ? 'No' : 'Si'
-      ];
-      h.getRange(i + 1, 1, 1, fila.length).setValues([fila]);
-      return { ok: true, actualizado: true };
+  return conCandadoCol_(() => {
+    if (data.descripcion) guardarPlatoCol(data.descripcion);
+    const h = getHojaCol(HOJAS_COL.MENUS);
+    const v = h.getDataRange().getValues();
+    for (let i = 1; i < v.length; i++) {
+      if (mismaFechaCol(v[i][0], data.semana) &&
+          String(v[i][1]).trim() === String(data.dia).trim() &&
+          String(v[i][2]).trim() === String(data.opcion).trim()) {
+        const fila = [
+          data.semana, data.dia, data.opcion,
+          data.descripcion || '',
+          data.activo === false ? 'No' : 'Si'
+        ];
+        h.getRange(i + 1, 1, 1, fila.length).setValues([fila]);
+        cacheColInvalidar_('menus');
+        return { ok: true, actualizado: true };
+      }
     }
-  }
-  // Una opcion nueva hereda el estado "especial" (y su descripcion) que ya
-  // tenga ese dia, si otras opciones del mismo dia estan marcadas como
-  // almuerzo mejorado.
-  let especialDelDia = 'No';
-  let descripcionEspecialDelDia = '';
-  for (let i = 1; i < v.length; i++) {
-    if (mismaFechaCol(v[i][0], data.semana) && String(v[i][1]).trim() === String(data.dia).trim() && String(v[i][5]).trim() === 'Si') {
-      especialDelDia = 'Si';
-      descripcionEspecialDelDia = String(v[i][6] || '');
-      break;
+    // Una opcion nueva hereda el estado "especial" (y su descripcion) que ya
+    // tenga ese dia, si otras opciones del mismo dia estan marcadas como
+    // almuerzo mejorado.
+    let especialDelDia = 'No';
+    let descripcionEspecialDelDia = '';
+    for (let i = 1; i < v.length; i++) {
+      if (mismaFechaCol(v[i][0], data.semana) && String(v[i][1]).trim() === String(data.dia).trim() && String(v[i][5]).trim() === 'Si') {
+        especialDelDia = 'Si';
+        descripcionEspecialDelDia = String(v[i][6] || '');
+        break;
+      }
     }
-  }
-  h.appendRow([
-    data.semana, data.dia, data.opcion,
-    data.descripcion || '',
-    data.activo === false ? 'No' : 'Si',
-    especialDelDia,
-    descripcionEspecialDelDia
-  ]);
-  return { ok: true, creado: true };
+    h.appendRow([
+      data.semana, data.dia, data.opcion,
+      data.descripcion || '',
+      data.activo === false ? 'No' : 'Si',
+      especialDelDia,
+      descripcionEspecialDelDia
+    ]);
+    cacheColInvalidar_('menus');
+    return { ok: true, creado: true };
+  });
 }
 function marcarDiaEspecialCol(semana, dia, especial, descripcionEspecial) {
   if (!semana || !dia) return { ok: false, error: 'Faltan datos del dia' };
-  const h = getHojaCol(HOJAS_COL.MENUS);
-  const v = h.getDataRange().getValues();
-  const valor = especial ? 'Si' : 'No';
-  const descripcion = especial ? String(descripcionEspecial || '') : '';
-  let actualizadas = 0;
-  for (let i = 1; i < v.length; i++) {
-    if (mismaFechaCol(v[i][0], semana) && String(v[i][1]).trim() === String(dia).trim()) {
-      h.getRange(i + 1, 6, 1, 2).setValues([[valor, descripcion]]);
-      actualizadas++;
+  return conCandadoCol_(() => {
+    const h = getHojaCol(HOJAS_COL.MENUS);
+    const v = h.getDataRange().getValues();
+    const valor = especial ? 'Si' : 'No';
+    const descripcion = especial ? String(descripcionEspecial || '') : '';
+    let actualizadas = 0;
+    for (let i = 1; i < v.length; i++) {
+      if (mismaFechaCol(v[i][0], semana) && String(v[i][1]).trim() === String(dia).trim()) {
+        h.getRange(i + 1, 6, 1, 2).setValues([[valor, descripcion]]);
+        actualizadas++;
+      }
     }
-  }
-  if (!actualizadas) return { ok: false, error: 'Primero define al menos una opcion para ese dia.' };
-  return { ok: true, actualizadas: actualizadas };
+    if (!actualizadas) return { ok: false, error: 'Primero define al menos una opcion para ese dia.' };
+    cacheColInvalidar_('menus');
+    return { ok: true, actualizadas: actualizadas };
+  });
 }
 function eliminarMenuCol(semana, dia, opcion) {
-  const h = getHojaCol(HOJAS_COL.MENUS);
-  const v = h.getDataRange().getValues();
-  for (let i = 1; i < v.length; i++) {
-    if (mismaFechaCol(v[i][0], semana) &&
-        String(v[i][1]).trim() === String(dia).trim() &&
-        String(v[i][2]).trim() === String(opcion).trim()) {
-      h.deleteRow(i + 1);
-      return { ok: true };
+  return conCandadoCol_(() => {
+    const h = getHojaCol(HOJAS_COL.MENUS);
+    const v = h.getDataRange().getValues();
+    for (let i = 1; i < v.length; i++) {
+      if (mismaFechaCol(v[i][0], semana) &&
+          String(v[i][1]).trim() === String(dia).trim() &&
+          String(v[i][2]).trim() === String(opcion).trim()) {
+        h.deleteRow(i + 1);
+        cacheColInvalidar_('menus');
+        return { ok: true };
+      }
     }
-  }
-  return { ok: false, error: 'Opcion de menu no encontrada' };
+    return { ok: false, error: 'Opcion de menu no encontrada' };
+  });
 }
 function copiarMenuSemanaCol(semanaOrigen, semanaDestino) {
   if (!semanaOrigen || !semanaDestino) return { ok: false, error: 'Faltan semanas' };
-  const h = getHojaCol(HOJAS_COL.MENUS);
-  const v = h.getDataRange().getValues();
-  let copiadas = 0;
-  const nuevasFilas = [];
-  for (let i = 1; i < v.length; i++) {
-    if (mismaFechaCol(v[i][0], semanaOrigen)) {
-      nuevasFilas.push([semanaDestino, v[i][1], v[i][2], v[i][3], v[i][4], v[i][5] || 'No']);
-      copiadas++;
+  return conCandadoCol_(() => {
+    const h = getHojaCol(HOJAS_COL.MENUS);
+    const v = h.getDataRange().getValues();
+    let copiadas = 0;
+    const nuevasFilas = [];
+    for (let i = 1; i < v.length; i++) {
+      if (mismaFechaCol(v[i][0], semanaOrigen)) {
+        nuevasFilas.push([semanaDestino, v[i][1], v[i][2], v[i][3], v[i][4], v[i][5] || 'No']);
+        copiadas++;
+      }
     }
-  }
-  nuevasFilas.forEach(f => h.appendRow(f));
-  return { ok: true, copiadas: copiadas };
+    nuevasFilas.forEach(f => h.appendRow(f));
+    cacheColInvalidar_('menus');
+    return { ok: true, copiadas: copiadas };
+  });
 }
 
 // --- PEDIDOS ---
@@ -467,57 +550,64 @@ function guardarPedidoCol(data) {
   if (!data.asAdmin && inscripcionesCerradasCol(data.semana)) {
     return { ok: false, error: 'El plazo para anotarse a esta semana ya cerro. Si necesitas hacer un cambio, contacta a administracion.', cerrado: true };
   }
-  const h = getHojaCol(HOJAS_COL.PEDIDOS);
-  const v = h.getDataRange().getValues();
-  const rn = normalizarRutCol(data.rut);
-  const ahora = timestampLocalCol();
-  for (let i = 1; i < v.length; i++) {
-    if (mismaFechaCol(v[i][1], data.semana) &&
-        normalizarRutCol(v[i][2]) === rn &&
-        String(v[i][4]).trim() === String(data.dia).trim()) {
-      h.getRange(i + 1, 6, 1, 2).setValues([[data.opcion, ahora]]);
-      return { ok: true, actualizado: true };
+  return conCandadoCol_(() => {
+    const h = getHojaCol(HOJAS_COL.PEDIDOS);
+    const v = h.getDataRange().getValues();
+    const rn = normalizarRutCol(data.rut);
+    const ahora = timestampLocalCol();
+    for (let i = 1; i < v.length; i++) {
+      if (mismaFechaCol(v[i][1], data.semana) &&
+          normalizarRutCol(v[i][2]) === rn &&
+          String(v[i][4]).trim() === String(data.dia).trim()) {
+        h.getRange(i + 1, 6, 1, 2).setValues([[data.opcion, ahora]]);
+        cacheColInvalidar_('pedidos');
+        return { ok: true, actualizado: true };
+      }
     }
-  }
-  const id = Utilities.getUuid();
-  h.appendRow([id, data.semana, data.rut, data.nombre || '', data.dia, data.opcion, ahora]);
-  return { ok: true, creado: true, id: id };
+    const id = Utilities.getUuid();
+    h.appendRow([id, data.semana, data.rut, data.nombre || '', data.dia, data.opcion, ahora]);
+    cacheColInvalidar_('pedidos');
+    return { ok: true, creado: true, id: id };
+  });
 }
 function eliminarPedidoCol(semana, rut, dia, asAdmin) {
   if (!asAdmin && inscripcionesCerradasCol(semana)) {
     return { ok: false, error: 'El plazo para anotarse a esta semana ya cerro. Si necesitas hacer un cambio, contacta a administracion.', cerrado: true };
   }
-  const h = getHojaCol(HOJAS_COL.PEDIDOS);
-  const v = h.getDataRange().getValues();
-  const rn = normalizarRutCol(rut);
-  for (let i = 1; i < v.length; i++) {
-    if (mismaFechaCol(v[i][1], semana) &&
-        normalizarRutCol(v[i][2]) === rn &&
-        String(v[i][4]).trim() === String(dia).trim()) {
-      h.deleteRow(i + 1);
-      return { ok: true };
+  return conCandadoCol_(() => {
+    const h = getHojaCol(HOJAS_COL.PEDIDOS);
+    const v = h.getDataRange().getValues();
+    const rn = normalizarRutCol(rut);
+    for (let i = 1; i < v.length; i++) {
+      if (mismaFechaCol(v[i][1], semana) &&
+          normalizarRutCol(v[i][2]) === rn &&
+          String(v[i][4]).trim() === String(dia).trim()) {
+        h.deleteRow(i + 1);
+        cacheColInvalidar_('pedidos');
+        return { ok: true };
+      }
     }
-  }
-  return { ok: false, error: 'Pedido no encontrado' };
+    return { ok: false, error: 'Pedido no encontrado' };
+  });
 }
 
 // --- TRABAJADOR: login + su semana ---
 function loginTrabajadorCol(rutIngresado) {
   if (!rutIngresado) return { ok: false, error: 'Ingresa tu RUT' };
   const rn = normalizarRutCol(rutIngresado);
-  const trabajadores = hojaAObjetosCol(HOJAS_COL.TRABAJADORES);
+  const trabajadores = trabajadoresCacheadosCol();
   const t = trabajadores.find(x => normalizarRutCol(x.rut) === rn);
   if (!t) { Utilities.sleep(300); return { ok: false, error: 'RUT no encontrado. Consulta con administracion.' }; }
   if (String(t.activo).toLowerCase() !== 'si') {
     return { ok: false, error: 'Tu registro esta inactivo. Consulta con administracion.' };
   }
-  const misPedidos = hojaAObjetosCol(HOJAS_COL.PEDIDOS).filter(p => normalizarRutCol(p.rut) === rn);
+  const misPedidos = pedidosCacheadosCol().filter(p => normalizarRutCol(p.rut) === rn);
   return {
     ok: true,
     trabajador: { rut: String(t.rut), nombre: String(t.nombre), tipo: String(t.tipo || 'Fijo') },
-    menus: menusAObjetosCol(),
+    menus: menusCacheadosCol(),
     pedidos: misPedidos,
-    config: obtenerConfigCol()
+    config: configCacheadoCol()
   };
 }
 
