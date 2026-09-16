@@ -76,7 +76,25 @@ function doPost(e) {
   }
 }
 
+// Acciones que solo administracion puede ejecutar. Antes, cualquiera que
+// descubriera la URL /exec (visible igual en el codigo del navegador, con
+// "Ver codigo fuente") podia llamarlas directamente sin conocer la clave de
+// admin: crear/borrar trabajadores, editar el menu, cambiar la clave, etc.
+// Ahora cada una exige la clave vigente en Config junto con la peticion.
+const ACCIONES_SOLO_ADMIN_COL = [
+  'guardarTrabajador', 'eliminarTrabajador', 'guardarMenu', 'eliminarMenu',
+  'marcarDiaEspecial', 'copiarMenuSemana', 'guardarConfig', 'eliminarPlato'
+];
+function claveAdminValidaCol(password) {
+  const clave = String(obtenerConfigCol().admin_password || '').trim();
+  return !!clave && String(password || '').trim() === clave;
+}
 function procesarAccionCol(body) {
+  const requiereAdmin = ACCIONES_SOLO_ADMIN_COL.indexOf(body.action) !== -1 ||
+    ((body.action === 'guardarPedido' || body.action === 'eliminarPedido') && body.asAdmin);
+  if (requiereAdmin && !claveAdminValidaCol(body.adminPassword)) {
+    return { ok: false, error: 'No autorizado. Vuelve a iniciar sesion como administracion.' };
+  }
   switch (body.action) {
     case 'loginAdmin':
       return verificarLoginAdminCol(body.password);
