@@ -1401,8 +1401,9 @@ function filasResumenSodexo(diasInfo, filaInicial, colInicial){
   return { filas, merge: { s:{r:filaInicial,c:0}, e:{r:filaInicial+totalFilas-1,c:1} } };
 }
 // Hoja "General": una fila por persona con el plato elegido cada día (o
-// "Ninguno (Ausente)"), y debajo el resumen de todos los días uno al lado
-// del otro.
+// "SIN ANOTARSE" si de verdad no tiene ningún pedido ese día — distinto de
+// "Ninguno (Ausente)", que es una opción real que alguien eligió), y debajo
+// el resumen de todos los días uno al lado del otro.
 function hojaGeneralSodexo(personas, diasInfo){
   const header = ['N°','Nombre', ...diasInfo.map(d=>d.label)];
   const filas = [header];
@@ -1410,7 +1411,7 @@ function hojaGeneralSodexo(personas, diasInfo){
     const fila = [idx+1, t.nombre];
     diasInfo.forEach(d=>{
       const p = d.pedidos.find(x=>normRut(x.rut)===normRut(t.rut));
-      if(!p){ fila.push('Ninguno (Ausente)'); return; }
+      if(!p){ fila.push('SIN ANOTARSE'); return; }
       const m = d.opciones.find(o=>String(o.opcion)===String(p.opcion));
       fila.push((m && m.descripcion && String(m.descripcion).trim()) ? m.descripcion : 'Colación');
     });
@@ -1551,7 +1552,7 @@ function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
     const col = COLOR_SODEXO[d.dia] || COLOR_SODEXO.Lunes;
     const filas = elegibles.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).map((t,idx)=>{
       const plato = platoDePersonaEnDia(t, d);
-      const celda = plato ? `<span class="pill-plato" style="background:${col.bg};color:${col.top}">${escHtml(plato)}</span>` : `<span class="ausente">Ninguno (Ausente)</span>`;
+      const celda = plato ? `<span class="pill-plato" style="background:${col.bg};color:${col.top}">${escHtml(plato)}</span>` : `<span class="sin-anotarse">Sin anotarse</span>`;
       return `<tr><td class="n">${idx+1}</td><td class="rut">${escHtml(t.rut)}</td><td>${escHtml(t.nombre)}</td><td>${celda}</td></tr>`;
     }).join('');
     return `<div class="page-break">
@@ -1567,7 +1568,7 @@ function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
   const filasGeneral = elegibles.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).map(t=>{
     const celdas = diasInfo.map(d=>{
       const plato = platoDePersonaEnDia(t, d);
-      return plato ? `<td>${escHtml(plato)}</td>` : `<td class="ausente">Ninguno (Ausente)</td>`;
+      return plato ? `<td>${escHtml(plato)}</td>` : `<td class="sin-anotarse">Sin anotarse</td>`;
     }).join('');
     return `<tr><td>${escHtml(t.nombre)}</td>${celdas}</tr>`;
   }).join('');
@@ -1616,6 +1617,7 @@ function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
   table.listado td.n{color:#94A3B8;width:26px}
   table.listado td.rut{color:#64748B;white-space:nowrap}
   table.listado .ausente{color:#B0B8C4;font-style:italic}
+  table.listado .sin-anotarse{color:#fff;background:#DC2626;font-weight:800;padding:2px 9px;border-radius:20px;font-size:10.5px;display:inline-block}
   table.listado .pill-plato{display:inline-block;padding:2px 9px;border-radius:20px;font-size:10.5px;font-weight:700}
   table.general{width:100%;border-collapse:collapse;font-size:9.8px}
   table.general th{padding:6px 5px;font-size:9px;text-transform:uppercase;color:#fff;text-align:left;letter-spacing:.2px}
@@ -1623,6 +1625,7 @@ function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
   table.general td{padding:5px;border-bottom:1px solid #EEF2F6}
   table.general tr:nth-child(even) td{background:#F8FAFC}
   table.general td.ausente{color:#C7CDD6;font-style:italic}
+  table.general td.sin-anotarse{color:#DC2626;font-weight:800}
   table.general tfoot td{font-weight:800;border-top:2px solid #CBD5E1;border-bottom:none;padding-top:7px}
   </style></head><body>
   <div class="hdr">
