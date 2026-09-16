@@ -1051,7 +1051,11 @@ function renderAdminReportes(){
   const btnSodexoPdf = el('button',{class:'btn'},'🎨 Reporte Sodexo (PDF)');
   btnSodexoPdf.disabled = !diasConMenuSodexo.length;
   btnSodexoPdf.onclick = ()=>abrirReporteSodexoPDF(nombreSitio, `Semana del ${fmtSemana(state.semanaRef)}`, diasInfoSodexo, elegibles);
-  toolbar.append(btnPdf, btnXls, btnSodexo, btnSodexoPdf);
+  const btnNoAnotadosPdf = el('button',{class:'btn danger'},`⚠️ No anotados (PDF)`);
+  btnNoAnotadosPdf.onclick = ()=>abrirReporteNoAnotadosPDF(nombreSitio, `Semana del ${fmtSemana(state.semanaRef)}`, noAnotados);
+  const btnNoAnotadosXls = el('button',{class:'btn danger'},`⚠️ No anotados (Excel)`);
+  btnNoAnotadosXls.onclick = ()=>exportarNoAnotadosExcel(`no_anotados_${semana}.xlsx`, nombreSitio, `Semana del ${fmtSemana(state.semanaRef)}`, noAnotados);
+  toolbar.append(btnPdf, btnXls, btnSodexo, btnSodexoPdf, btnNoAnotadosPdf, btnNoAnotadosXls);
   box.appendChild(toolbar);
 
   const stats = el('div',{class:'stat-row'});
@@ -1638,15 +1642,73 @@ function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
   </div>
   </body></html>`;
 }
-function abrirReporteSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
-  if(!diasInfo.length){ alert('No hay menús publicados para generar el reporte.'); return; }
-  const html = generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles);
+function abrirVentanaHtmlParaImprimir(html){
   const ventana = window.open('', '_blank');
   if(!ventana){ alert('El navegador bloqueó la ventana nueva. Permite ventanas emergentes para generar el PDF.'); return; }
   ventana.document.open();
   ventana.document.write(html);
   ventana.document.close();
   setTimeout(()=>{ try{ ventana.focus(); ventana.print(); }catch(e){} }, 300);
+}
+function abrirReporteSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
+  if(!diasInfo.length){ alert('No hay menús publicados para generar el reporte.'); return; }
+  abrirVentanaHtmlParaImprimir(generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles));
+}
+// Recordatorio de quiénes NO se han anotado (cero pedidos esa semana, es
+// decir ni siquiera entraron a la app) — pensado para copiar/enviar a esas
+// personas, separado del reporte completo. No incluye a quienes sí
+// entraron y eligieron "Ninguno (Ausente)": esos ya respondieron.
+function generarHtmlNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo){
+  const lista = noAnotados.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre)));
+  const filas = lista.map((t,idx)=>`<tr><td class="n">${idx+1}</td><td>${escHtml(t.nombre)}${t.tipo==='Spot'?' 🔸':''}</td><td class="rut">${escHtml(t.rut)}</td><td>${escHtml(extraInfo ? extraInfo(t) : '')}</td></tr>`).join('');
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>No anotados</title><style>
+  @page { size: A4; margin: 12mm 14mm; }
+  *{box-sizing:border-box}
+  body{font-family:'Segoe UI',Arial,Helvetica,sans-serif;color:#1E293B;margin:0;font-size:12px;line-height:1.35;background:#fff}
+  .hdr{display:flex;align-items:center;justify-content:space-between;gap:14px;background:linear-gradient(135deg,#DC2626,#7F1D1D);color:#fff;border-radius:14px;padding:16px 20px;margin-bottom:14px}
+  .hdr .left{display:flex;align-items:center;gap:12px}
+  .hdr .icon{width:42px;height:42px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:20px;flex:none;border:1.5px solid rgba(255,255,255,.5)}
+  .hdr h1{font-size:18px;margin:0 0 2px}
+  .hdr .sub{font-size:11.5px;color:rgba(255,255,255,.88)}
+  .callout{background:#FEF2F2;border:1.5px solid #FCA5A5;border-radius:12px;padding:10px 14px;margin-bottom:14px;color:#7F1D1D;font-size:12px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.3px;color:#475569;border-bottom:2px solid #E2E8F0}
+  td{padding:7px 8px;border-bottom:1px solid #EEF2F6}
+  tr:nth-child(even) td{background:#FEF2F2}
+  td.n{color:#94A3B8;width:26px}
+  td.rut{color:#64748B;white-space:nowrap}
+  .foot{margin-top:14px;text-align:center;color:#94A3B8;font-size:9.5px;border-top:1px solid #E2E8F0;padding-top:6px}
+  </style></head><body>
+  <div class="hdr">
+    <div class="left"><div class="icon">⚠️</div><div><h1>Recordatorio: aún no se anotan</h1><div class="sub">${escHtml(nombreSitio)}${nombreSitio?' · ':''}${escHtml(subtitulo)}</div></div></div>
+  </div>
+  <div class="callout">${lista.length===1?'Esta 1 persona no tiene':`Estas ${lista.length} personas no tienen`} ninguna elección registrada (ni siquiera "Ninguno") — probablemente no ${lista.length===1?'ha':'han'} entrado a la app. Recuérdale${lista.length===1?'':'s'} anotarse antes del cierre.</div>
+  <table><tr><th>N°</th><th>Nombre</th><th>RUT</th><th>${extraInfo?'Detalle':''}</th></tr>${filas}</table>
+  <div class="foot">Generado desde Colaciones Semanales — ${escHtml(fmtFechaCorta(iso(new Date())))}</div>
+  </body></html>`;
+}
+function abrirReporteNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo){
+  if(!noAnotados.length){ alert('Nadie falta por anotarse 🎉'); return; }
+  abrirVentanaHtmlParaImprimir(generarHtmlNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo));
+}
+function exportarNoAnotadosExcel(nombreArchivo, nombreSitio, subtitulo, noAnotados, extraInfo, extraTitulo){
+  if(!noAnotados.length){ alert('Nadie falta por anotarse 🎉'); return; }
+  const lista = noAnotados.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre)));
+  const filas = [];
+  if(nombreSitio) filas.push([nombreSitio]);
+  filas.push([subtitulo]);
+  filas.push([]);
+  const encabezado = ['N°','Nombre','RUT','Tipo'];
+  if(extraTitulo) encabezado.push(extraTitulo);
+  filas.push(encabezado);
+  lista.forEach((t,idx)=>{
+    const fila = [idx+1, t.nombre, t.rut, t.tipo];
+    if(extraInfo) fila.push(extraInfo(t));
+    filas.push(fila);
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filas), 'No anotados');
+  XLSX.writeFile(wb, nombreArchivo);
 }
 // Exporta un solo .xlsx con 4 hojas: resumen a gran escala (por opción),
 // desglose por nombre de plato, y el registro de personas (anotados y sin
@@ -1789,7 +1851,13 @@ function renderAdminPeriodo(){
   const btnSodexoPdf = el('button',{class:'btn'},'🎨 Reporte Sodexo (PDF)');
   btnSodexoPdf.disabled = !diasInfoSodexoPer.length;
   btnSodexoPdf.onclick = ()=>abrirReporteSodexoPDF(nombreSitioPer, `${fmtFechaCorta(state.periodoDesde)} al ${fmtFechaCorta(state.periodoHasta)}`, diasInfoSodexoPer, elegiblesUnicosPer);
-  toolbar.append(btnPdf, btnXls, btnSodexo, btnSodexoPdf);
+  const subtituloPer = `${fmtFechaCorta(state.periodoDesde)} al ${fmtFechaCorta(state.periodoHasta)}`;
+  const extraInfoFaltas = f => `${f.semanas.length} de ${conMenu.length} semana${conMenu.length===1?'':'s'}`;
+  const btnNoAnotadosPdf = el('button',{class:'btn danger'},'⚠️ No anotados (PDF)');
+  btnNoAnotadosPdf.onclick = ()=>abrirReporteNoAnotadosPDF(nombreSitioPer, subtituloPer, listaFaltas, extraInfoFaltas);
+  const btnNoAnotadosXls = el('button',{class:'btn danger'},'⚠️ No anotados (Excel)');
+  btnNoAnotadosXls.onclick = ()=>exportarNoAnotadosExcel(`no_anotados_periodo_${state.periodoDesde}_a_${state.periodoHasta}.xlsx`, nombreSitioPer, subtituloPer, listaFaltas, extraInfoFaltas, 'Semanas sin anotarse');
+  toolbar.append(btnPdf, btnXls, btnSodexo, btnSodexoPdf, btnNoAnotadosPdf, btnNoAnotadosXls);
   box.appendChild(toolbar);
 
   const stats = el('div',{class:'stat-row'});
