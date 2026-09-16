@@ -530,6 +530,28 @@ function renderTrabajadorBody(wrap){
   wrap.appendChild(resumen);
 }
 function normRut(r){ return String(r||'').toLowerCase().replace(/\.|-|\s/g,'').trim(); }
+// La opción "Ninguno (Ausente)" se arma igual que cualquier otra (el admin
+// la agrega con "Agregar opción"), para obligar a que todos respondan la
+// semana sí o sí: quien no tiene ni un pedido esa semana es porque no entró
+// a la app, no porque decidiera no ir. Pero como no hay que prepararle
+// colación a quien elige esa opción, se excluye de los totales de
+// colaciones (gráficos, Excel, Reporte Sodexo) aunque sí cuenta como
+// "anotado" (respondió).
+function esOpcionAusente(descripcion){
+  return String(descripcion||'').trim().toLowerCase()==='ninguno (ausente)';
+}
+function esPedidoAusente(pedido, opciones){
+  const m = (opciones||[]).find(o=>String(o.opcion)===String(pedido.opcion) && (o.dia===undefined || o.dia===pedido.dia));
+  return !!m && esOpcionAusente(m.descripcion);
+}
+// Cuenta pedidos de un día que sí son colación real (descarta los "Ninguno").
+function contarColacionesDia(pedidosDia, opcionesDia){
+  return pedidosDia.filter(p=>!esPedidoAusente(p, opcionesDia)).length;
+}
+// Igual, pero para toda una semana (opciones puede traer varios días mezclados).
+function totalColacionesSemana(pedidosSemana, menusSemana){
+  return pedidosSemana.filter(p=>!esPedidoAusente(p, menusSemana)).length;
+}
 function esDiaEspecial(opciones){ return opciones.some(o=>String(o.especial||'').toLowerCase()==='si'); }
 function descripcionEspecialDia(opciones){
   const o = opciones.find(o=>String(o.especial||'').toLowerCase()==='si' && o.descripcionespecial);
@@ -996,7 +1018,7 @@ function datosSemana(semanaIso){
   const anotados = elegibles.filter(t=>rutsAnotados.has(normRut(t.rut)));
   const noAnotados = elegibles.filter(t=>!rutsAnotados.has(normRut(t.rut)));
   const diasEspeciales = new Set(DIAS.filter(d=>esDiaEspecial(menusSemana.filter(m=>m.dia===d))));
-  const pedidosEspeciales = pedidosSemana.filter(p=>diasEspeciales.has(p.dia)).length;
+  const pedidosEspeciales = pedidosSemana.filter(p=>diasEspeciales.has(p.dia) && !esPedidoAusente(p, menusSemana)).length;
   return {semana:semanaIso, menusSemana, pedidosSemana, elegibles, anotados, noAnotados, diasEspeciales, pedidosEspeciales};
 }
 function renderAdminReportes(){
@@ -1045,7 +1067,7 @@ function renderAdminReportes(){
   }
 
   const diasConMenuChart = DIAS.filter(d=>menusSemana.some(m=>m.dia===d));
-  const barItemsSemana = diasConMenuChart.map(d=>({label:d.slice(0,3), value: pedidosSemana.filter(p=>p.dia===d).length}));
+  const barItemsSemana = diasConMenuChart.map(d=>({label:d.slice(0,3), value: contarColacionesDia(pedidosSemana.filter(p=>p.dia===d), menusSemana.filter(m=>m.dia===d))}));
   box.appendChild(chartsCard('Colaciones por día', barItemsSemana, anotados.length, noAnotados.length, 'Anotados', 'Sin anotarse'));
 
   const resumenCard = el('div',{class:'card'});
@@ -1067,9 +1089,9 @@ function renderAdminReportes(){
     tbl.appendChild(tr);
   });
   const totTr = el('tr',{});
-  totTr.appendChild(el('td',{}, el('strong',{},'Total anotados')));
+  totTr.appendChild(el('td',{}, el('strong',{},'Total colaciones')));
   diasConMenu.forEach(d=>{
-    const n = pedidosSemana.filter(p=>p.dia===d).length;
+    const n = contarColacionesDia(pedidosSemana.filter(p=>p.dia===d), menusSemana.filter(m=>m.dia===d));
     totTr.appendChild(el('td',{}, el('strong',{},String(n))));
   });
   tbl.appendChild(totTr);
@@ -1327,15 +1349,17 @@ function tituloDiaFecha(fechaIso, dia){
 function desgloseDiaSodexo(pedidosDia, opcionesDia){
   const conteos = new Map();
   let colacion = 0;
+  let ausentes = 0;
   pedidosDia.forEach(p=>{
     const m = opcionesDia.find(o=>String(o.opcion)===String(p.opcion));
+    if(m && esOpcionAusente(m.descripcion)){ ausentes++; return; }
     const desc = (m && m.descripcion && String(m.descripcion).trim()) ? String(m.descripcion).trim() : '';
     if(!desc){ colacion++; return; }
     conteos.set(desc, (conteos.get(desc)||0)+1);
   });
   const platos = Array.from(conteos.entries());
   const total = platos.reduce((s,[,q])=>s+q,0);
-  return { platos, total, colacion, totalDia: total+colacion };
+  return { platos, total, colacion, ausentes, totalDia: total+colacion };
 }
 // Bloque RESUMEN (platos + cantidad, Total, Colación, Total <día>) para uno
 // o varios días puestos en columnas una al lado de la otra, como en la hoja
@@ -1344,7 +1368,7 @@ function desgloseDiaSodexo(pedidosDia, opcionesDia){
 function filasResumenSodexo(diasInfo, filaInicial, colInicial){
   const desgloses = diasInfo.map(d=>desgloseDiaSodexo(d.pedidos, d.opciones));
   const maxPlatos = Math.max(0, ...desgloses.map(x=>x.platos.length));
-  const totalFilas = maxPlatos + 3;
+  const totalFilas = maxPlatos + 4;
   const filas = [];
   for(let i=0;i<totalFilas;i++){
     const fila = [];
@@ -1355,7 +1379,8 @@ function filasResumenSodexo(diasInfo, filaInicial, colInicial){
       if(i < desg.platos.length){ fila[c1]=desg.platos[i][0]; fila[c2]=desg.platos[i][1]; }
       else if(i===maxPlatos){ fila[c1]='Total'; fila[c2]=desg.total; }
       else if(i===maxPlatos+1){ fila[c1]='Colación'; fila[c2]=desg.colacion||''; }
-      else if(i===maxPlatos+2){ fila[c1]=`Total ${d.label}`; fila[c2]=desg.totalDia; }
+      else if(i===maxPlatos+2){ fila[c1]='Ausentes (Ninguno)'; fila[c2]=desg.ausentes||''; }
+      else if(i===maxPlatos+3){ fila[c1]=`Total ${d.label}`; fila[c2]=desg.totalDia; }
     });
     filas.push(fila);
   }
@@ -1484,13 +1509,13 @@ function platoDePersonaEnDia(t, d){
   return (m && m.descripcion && String(m.descripcion).trim()) ? m.descripcion : 'Colación';
 }
 function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
-  const totalColaciones = diasInfo.reduce((s,d)=>s+d.pedidos.length,0);
+  const desgloses = diasInfo.map(d=>desgloseDiaSodexo(d.pedidos, d.opciones));
+  const totalColaciones = desgloses.reduce((s,x)=>s+x.totalDia,0);
   const rutsAnotados = new Set();
   diasInfo.forEach(d=>d.pedidos.forEach(p=>rutsAnotados.add(normRut(p.rut))));
   const anotados = elegibles.filter(t=>rutsAnotados.has(normRut(t.rut))).length;
   const noAnotados = Math.max(0, elegibles.length - anotados);
-  const desgloses = diasInfo.map(d=>desgloseDiaSodexo(d.pedidos, d.opciones));
-  const totalMejoradas = diasInfo.reduce((s,d)=>s+(esDiaEspecial(d.opciones)?d.pedidos.length:0),0);
+  const totalMejoradas = diasInfo.reduce((s,d)=>s+(esDiaEspecial(d.opciones)?contarColacionesDia(d.pedidos, d.opciones):0),0);
 
   const tarjetasDias = diasInfo.map((d,i)=>{
     const col = COLOR_SODEXO[d.dia] || COLOR_SODEXO.Lunes;
@@ -1499,9 +1524,10 @@ function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
     const filasPlato = desg.platos.map(([nombre,qty])=>
       `<div class="plato-row"><span class="nombre">${escHtml(nombre)}</span><span class="qty" style="background:${col.top}">${qty}</span></div>`).join('');
     const filaColacion = desg.colacion ? `<div class="plato-row"><span class="nombre colacion-line">🌟 Colación (sin plato asignado)</span><span class="qty" style="background:#B45309">${desg.colacion}</span></div>` : '';
+    const filaAusente = desg.ausentes ? `<div class="plato-row"><span class="nombre" style="color:#94A3B8;font-style:italic">Ninguno (Ausente)</span><span class="qty" style="background:#94A3B8">${desg.ausentes}</span></div>` : '';
     return `<div class="card" ${full}>
       <div class="top" style="background:${col.top}"><span class="dia">${escHtml(d.dia)}</span><span class="fecha">${escHtml(d.label)}</span></div>
-      <div class="body">${filasPlato}${filaColacion}
+      <div class="body">${filasPlato}${filaColacion}${filaAusente}
         <div class="total-dia" style="background:${col.bg};color:${col.top}"><span>Total ${escHtml(d.dia.toLowerCase())}</span><span>${desg.totalDia}</span></div>
       </div>
     </div>`;
@@ -1636,7 +1662,7 @@ function exportarExcel(semana, anotados, noAnotados, pedidosSemana, menusSemana,
   codigos.forEach(cod=>{
     filasResumen.push([cod, ...dias.map(d=>pedidosSemana.filter(p=>p.dia===d && p.opcion===cod).length)]);
   });
-  filasResumen.push(['Total anotados', ...dias.map(d=>pedidosSemana.filter(p=>p.dia===d).length)]);
+  filasResumen.push(['Total colaciones', ...dias.map(d=>contarColacionesDia(pedidosSemana.filter(p=>p.dia===d), menusSemana.filter(m=>m.dia===d)))]);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filasResumen), 'Resumen');
 
   // Hoja 2: Desglose por nombre de plato y cantidad
@@ -1731,7 +1757,7 @@ function renderAdminPeriodo(){
     return box;
   }
 
-  const totalColaciones = datosPorSemana.reduce((s,d)=>s+d.pedidosSemana.length,0);
+  const totalColaciones = datosPorSemana.reduce((s,d)=>s+totalColacionesSemana(d.pedidosSemana, d.menusSemana),0);
   const totalMejoradas = datosPorSemana.reduce((s,d)=>s+d.pedidosEspeciales,0);
   const totalAnotados = datosPorSemana.reduce((s,d)=>s+d.anotados.length,0);
   const totalNoAnotados = datosPorSemana.reduce((s,d)=>s+d.noAnotados.length,0);
@@ -1775,7 +1801,7 @@ function renderAdminPeriodo(){
 
   const porDiaAgg = {};
   DIAS.forEach(d=>{ porDiaAgg[d] = 0; });
-  datosPorSemana.forEach(d=>{ d.pedidosSemana.forEach(p=>{ porDiaAgg[p.dia] = (porDiaAgg[p.dia]||0)+1; }); });
+  datosPorSemana.forEach(d=>{ d.pedidosSemana.forEach(p=>{ if(!esPedidoAusente(p, d.menusSemana)) porDiaAgg[p.dia] = (porDiaAgg[p.dia]||0)+1; }); });
   const barItemsPeriodo = DIAS.map(d=>({label:d.slice(0,3), value: porDiaAgg[d]||0}));
   box.appendChild(chartsCard('Colaciones por día (todo el periodo)', barItemsPeriodo, totalAnotados, totalNoAnotados, 'Anotados', 'Sin anotarse'));
 
@@ -1792,7 +1818,7 @@ function renderAdminPeriodo(){
     tr.appendChild(el('td',{}, String(d.elegibles.length)));
     tr.appendChild(el('td',{}, String(d.anotados.length)));
     tr.appendChild(el('td',{}, String(d.noAnotados.length)));
-    tr.appendChild(el('td',{}, String(d.pedidosSemana.length)));
+    tr.appendChild(el('td',{}, String(totalColacionesSemana(d.pedidosSemana, d.menusSemana))));
     tr.appendChild(el('td',{}, String(d.pedidosEspeciales)));
     dtbl.appendChild(tr);
   });
@@ -1831,7 +1857,7 @@ function exportarExcelPeriodo(desde, hasta, datosPorSemana, listaFaltas){
   const conMenu = datosPorSemana.filter(d=>d.menusSemana.length);
   const wb = XLSX.utils.book_new();
 
-  const totalColaciones = datosPorSemana.reduce((s,d)=>s+d.pedidosSemana.length,0);
+  const totalColaciones = datosPorSemana.reduce((s,d)=>s+totalColacionesSemana(d.pedidosSemana, d.menusSemana),0);
   const totalMejoradas = datosPorSemana.reduce((s,d)=>s+d.pedidosEspeciales,0);
   const totalAnotados = datosPorSemana.reduce((s,d)=>s+d.anotados.length,0);
   const totalNoAnotados = datosPorSemana.reduce((s,d)=>s+d.noAnotados.length,0);
@@ -1847,7 +1873,7 @@ function exportarExcelPeriodo(desde, hasta, datosPorSemana, listaFaltas){
 
   const filasDetalle = [['Semana','Elegibles','Anotados','Sin anotarse','Colaciones','Mejoradas']];
   conMenu.forEach(d=>{
-    filasDetalle.push([fmtFechaCorta(d.semana), d.elegibles.length, d.anotados.length, d.noAnotados.length, d.pedidosSemana.length, d.pedidosEspeciales]);
+    filasDetalle.push([fmtFechaCorta(d.semana), d.elegibles.length, d.anotados.length, d.noAnotados.length, totalColacionesSemana(d.pedidosSemana, d.menusSemana), d.pedidosEspeciales]);
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filasDetalle), 'Detalle por semana');
 
