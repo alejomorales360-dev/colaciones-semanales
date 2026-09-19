@@ -147,14 +147,22 @@ function responderJsonpCol(data, callback) {
 // leer la hoja; el resto reutiliza el mismo resultado cacheado. Los
 // pedidos se cachean muy poco (5s) porque cambian todo el tiempo; el
 // resto un poco mas porque cambia rara vez.
-function cacheColLeer_(clave, ttlSeg, fn) {
+// `esValido` (opcional) evita cachear un resultado "vacio por error": por
+// ejemplo, si leer Config falla transitoriamente (posible bajo carga con
+// 60 personas a la vez) y devuelve {} en vez de lanzar, sin este chequeo
+// ese {} quedaria cacheado 20s y durante ese rato toda accion de admin
+// fallaria como "No autorizado" y el cierre de inscripciones usaria los
+// valores por defecto en vez de los configurados.
+function cacheColLeer_(clave, ttlSeg, fn, esValido) {
   const cache = CacheService.getScriptCache();
   try {
     const guardado = cache.get(clave);
     if (guardado != null) return JSON.parse(guardado);
   } catch (err) { /* cache ilegible: seguir y recalcular */ }
   const valor = fn();
-  try { cache.put(clave, JSON.stringify(valor), ttlSeg); } catch (err) { /* valor muy grande para cachear: no es grave */ }
+  if (!esValido || esValido(valor)) {
+    try { cache.put(clave, JSON.stringify(valor), ttlSeg); } catch (err) { /* valor muy grande para cachear: no es grave */ }
+  }
   return valor;
 }
 function cacheColInvalidar_(clave) {
@@ -163,7 +171,7 @@ function cacheColInvalidar_(clave) {
 function trabajadoresCacheadosCol() { return cacheColLeer_('trabajadores', 20, () => hojaAObjetosCol(HOJAS_COL.TRABAJADORES)); }
 function menusCacheadosCol() { return cacheColLeer_('menus', 15, menusAObjetosCol); }
 function platosCacheadosCol() { return cacheColLeer_('platos', 30, listarPlatosCol); }
-function configCacheadoCol() { return cacheColLeer_('config', 20, obtenerConfigCol); }
+function configCacheadoCol() { return cacheColLeer_('config', 20, obtenerConfigCol, v => v && Object.keys(v).length > 0); }
 function pedidosCacheadosCol() { return cacheColLeer_('pedidos', 5, () => hojaAObjetosCol(HOJAS_COL.PEDIDOS)); }
 // Un solo candado para todo el script: evita que dos personas escribiendo
 // pedidos/menus al mismo tiempo se pisen (por ejemplo, dos filas para el
@@ -173,7 +181,7 @@ function pedidosCacheadosCol() { return cacheColLeer_('pedidos', 5, () => hojaAO
 function conCandadoCol_(fn) {
   const candado = LockService.getScriptLock();
   try {
-    candado.waitLock(10000);
+    candado.waitLock(20000);
   } catch (err) {
     return { ok: false, error: 'El servidor está muy ocupado en este momento, intenta de nuevo en unos segundos.' };
   }
@@ -405,17 +413,24 @@ function eliminarTrabajadorCol(rut) {
 // --- CATALOGO DE PLATOS ---
 // Guarda un plato en el catalogo si no existe todavia (sin distinguir
 // mayus/minus ni espacios extra), para poder elegirlo rapido despues.
-function guardarPlatoCol(nombre) {
+// Version SIN candado propio: usarla solo desde codigo que YA sostiene el
+// candado del script (ej. guardarMenuCol). Adquirir el candado dos veces en
+// la misma ejecucion no esta documentado como seguro en Apps Script, asi
+// que en vez de confiar en eso, guardarMenuCol llama directamente a esta
+// version interna.
+function guardarPlatoInterno_(nombre) {
   const limpio = String(nombre || '').trim();
   if (!limpio) return;
-  conCandadoCol_(() => {
-    const h = getHojaCol(HOJAS_COL.PLATOS);
-    const v = h.getDataRange().getValues();
-    const clave = limpio.toLowerCase();
-    const yaExiste = v.slice(1).some(f => String(f[0]).trim().toLowerCase() === clave);
-    if (!yaExiste) { h.appendRow([limpio]); cacheColInvalidar_('platos'); }
-    return null;
-  });
+  const h = getHojaCol(HOJAS_COL.PLATOS);
+  const v = h.getDataRange().getValues();
+  const clave = limpio.toLowerCase();
+  const yaExiste = v.slice(1).some(f => String(f[0]).trim().toLowerCase() === clave);
+  if (!yaExiste) { h.appendRow([limpio]); cacheColInvalidar_('platos'); }
+}
+// Version publica con su propio candado, para cuando se llama fuera de otra
+// funcion ya protegida (ej. la migracion manual agregarHojaPlatos).
+function guardarPlatoCol(nombre) {
+  return conCandadoCol_(() => { guardarPlatoInterno_(nombre); return null; });
 }
 function listarPlatosCol() {
   try {
@@ -445,7 +460,7 @@ function eliminarPlatoCol(nombre) {
 function guardarMenuCol(data) {
   if (!data || !data.semana || !data.dia || !data.opcion) return { ok: false, error: 'Faltan datos del menu' };
   return conCandadoCol_(() => {
-    if (data.descripcion) guardarPlatoCol(data.descripcion);
+    if (data.descripcion) guardarPlatoInterno_(data.descripcion);
     const h = getHojaCol(HOJAS_COL.MENUS);
     const v = h.getDataRange().getValues();
     for (let i = 1; i < v.length; i++) {
@@ -525,10 +540,21 @@ function copiarMenuSemanaCol(semanaOrigen, semanaDestino) {
   return conCandadoCol_(() => {
     const h = getHojaCol(HOJAS_COL.MENUS);
     const v = h.getDataRange().getValues();
+    // Evita duplicar filas si ya existe menu en la semana destino (ej. el
+    // admin hace doble clic, o reintenta tras una respuesta que parecia
+    // no haber llegado): salta las combinaciones dia+opcion que ya existan.
+    const yaExisteDestino = new Set();
+    for (let i = 1; i < v.length; i++) {
+      if (mismaFechaCol(v[i][0], semanaDestino)) {
+        yaExisteDestino.add(String(v[i][1]).trim() + '|' + String(v[i][2]).trim());
+      }
+    }
     let copiadas = 0;
     const nuevasFilas = [];
     for (let i = 1; i < v.length; i++) {
       if (mismaFechaCol(v[i][0], semanaOrigen)) {
+        const clave = String(v[i][1]).trim() + '|' + String(v[i][2]).trim();
+        if (yaExisteDestino.has(clave)) continue;
         nuevasFilas.push([semanaDestino, v[i][1], v[i][2], v[i][3], v[i][4], v[i][5] || 'No']);
         copiadas++;
       }

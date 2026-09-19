@@ -283,9 +283,26 @@ function jsonp(body){
 // ---------- render root ----------
 function render(){
   const app = document.getElementById('app');
-  if(!state.role){ app.innerHTML=''; app.appendChild(renderLogin()); return; }
-  if(state.role==='admin'){ app.innerHTML=''; app.appendChild(renderAdmin()); return; }
-  app.innerHTML=''; app.appendChild(renderTrabajador());
+  try{
+    if(!state.role){ app.innerHTML=''; app.appendChild(renderLogin()); return; }
+    if(state.role==='admin'){ app.innerHTML=''; app.appendChild(renderAdmin()); return; }
+    app.innerHTML=''; app.appendChild(renderTrabajador());
+  } catch(err){
+    // Red de seguridad: si algo deja el estado en una forma inesperada
+    // (respuesta corrupta del servidor, etc.), esto evita una pantalla en
+    // blanco sin salida — se ve un botón para reiniciar la sesión en vez de
+    // tener que recargar la página a ciegas.
+    console.error('Error al renderizar:', err);
+    app.innerHTML='';
+    const box = el('div',{class:'center'});
+    const card = el('div',{class:'login-card'});
+    card.appendChild(el('div',{class:'msg err'},'Ocurrió un error inesperado. Vuelve a intentar.'));
+    const btn = el('button',{class:'btn primary',style:'margin-top:12px'},'Reiniciar sesión');
+    btn.onclick = ()=>{ state.role=null; state.admin=false; state.adminPassword=null; state.trabajador=null; render(); };
+    card.appendChild(btn);
+    box.appendChild(card);
+    app.appendChild(box);
+  }
 }
 
 // ---------- LOGIN ----------
@@ -327,7 +344,14 @@ function renderLogin(){
     btnT.disabled = true; btnT.textContent='Ingresando…';
     const res = await callApi({action:'loginTrabajador', rut});
     btnT.disabled = false; btnT.textContent='Ingresar';
-    if(!res.ok){ msgBox.innerHTML=''; msgBox.appendChild(el('div',{class:'msg err'}, res.error||'No se pudo ingresar')); return; }
+    // Antes de comprometer el estado global, se valida que la respuesta
+    // tenga la forma esperada: una respuesta incompleta o corrupta (posible
+    // bajo carga, o si el fallback JSONP entrega algo raro) no debe dejar
+    // state.role a medio configurar, porque eso deja la pantalla rota sin
+    // ningún mensaje y sin forma de volver salvo recargar la página.
+    if(!res || !res.ok || !res.trabajador || !res.trabajador.rut){
+      msgBox.innerHTML=''; msgBox.appendChild(el('div',{class:'msg err'}, (res&&res.error)||'No se pudo ingresar. Intenta de nuevo.')); return;
+    }
     state.role='trabajador';
     state.trabajador = res.trabajador;
     state.data.menus = res.menus||[];
@@ -342,8 +366,8 @@ function renderLogin(){
     btnA.disabled = true; btnA.textContent='Ingresando…';
     const res = await callApi({action:'loginAdmin', password:pass});
     btnA.disabled=false; btnA.textContent='Ingresar como admin';
-    if(!res.ok){
-      msgBox.innerHTML=''; msgBox.appendChild(el('div',{class:'msg err'}, res.error||'Clave incorrecta'));
+    if(!res || !res.ok || !res.config){
+      msgBox.innerHTML=''; msgBox.appendChild(el('div',{class:'msg err'}, (res&&res.error)||'Clave incorrecta o respuesta inválida del servidor. Intenta de nuevo.'));
       return;
     }
     state.role='admin';
@@ -472,31 +496,41 @@ function renderTrabajadorBody(wrap){
       optEl.onclick = async (e)=>{
         e.preventDefault();
         if(cerrado) return;
-        if(isSel && !confirm(`¿Quitar tu elección (${o.opcion}) de ${dia}?`)) return;
+        // Evita que un doble toque (frecuente en mobile con conexión lenta)
+        // dispare dos peticiones a la vez para el mismo día: sin esto, ambas
+        // podían calcular el mismo índice "no existe todavía" y terminar
+        // agregando dos pedidos duplicados en el estado local.
+        if(card.dataset.busy==='1') return;
+        card.dataset.busy = '1';
+        if(isSel && !confirm(`¿Quitar tu elección (${o.opcion}) de ${dia}?`)){ card.dataset.busy=''; return; }
         optEl.style.opacity=.6;
-        const idx = state.data.pedidos.findIndex(p=>p.semana===semana && p.dia===dia && normRut(p.rut)===normRut(state.trabajador.rut));
-        if(isSel){
-          // Tocar la opción ya elegida la desmarca (queda sin elegir ese día).
-          const res = await callApi({action:'eliminarPedido', semana, rut:state.trabajador.rut, dia});
-          if(res.ok){
-            if(idx>=0) state.data.pedidos.splice(idx,1);
-            state.msg = {type:'ok', text:`Quitaste tu elección de ${dia}.`};
+        try{
+          const idx = state.data.pedidos.findIndex(p=>p.semana===semana && p.dia===dia && normRut(p.rut)===normRut(state.trabajador.rut));
+          if(isSel){
+            // Tocar la opción ya elegida la desmarca (queda sin elegir ese día).
+            const res = await callApi({action:'eliminarPedido', semana, rut:state.trabajador.rut, dia});
+            if(res && res.ok){
+              if(idx>=0) state.data.pedidos.splice(idx,1);
+              state.msg = {type:'ok', text:`Quitaste tu elección de ${dia}.`};
+            } else {
+              state.msg = {type:'err', text: (res&&res.error)||'No se pudo quitar tu elección.'};
+            }
           } else {
-            state.msg = {type:'err', text: res.error||'No se pudo quitar tu elección.'};
+            const res = await callApi({action:'guardarPedido', data:{
+              semana, rut: state.trabajador.rut, nombre: state.trabajador.nombre, dia, opcion:o.opcion
+            }});
+            if(res && res.ok){
+              const nuevo = {semana, rut:state.trabajador.rut, nombre:state.trabajador.nombre, dia, opcion:o.opcion, timestamp:new Date().toISOString()};
+              if(idx>=0) state.data.pedidos[idx]=nuevo; else state.data.pedidos.push(nuevo);
+              state.msg = {type:'ok', text:`Elegiste la opción ${o.opcion} para ${dia}.`};
+            } else {
+              state.msg = {type:'err', text: (res&&res.error)||'No se pudo guardar tu elección.'};
+            }
           }
-        } else {
-          const res = await callApi({action:'guardarPedido', data:{
-            semana, rut: state.trabajador.rut, nombre: state.trabajador.nombre, dia, opcion:o.opcion
-          }});
-          if(res.ok){
-            const nuevo = {semana, rut:state.trabajador.rut, nombre:state.trabajador.nombre, dia, opcion:o.opcion, timestamp:new Date().toISOString()};
-            if(idx>=0) state.data.pedidos[idx]=nuevo; else state.data.pedidos.push(nuevo);
-            state.msg = {type:'ok', text:`Elegiste la opción ${o.opcion} para ${dia}.`};
-          } else {
-            state.msg = {type:'err', text: res.error||'No se pudo guardar tu elección.'};
-          }
+        } finally {
+          card.dataset.busy = '';
+          renderTrabajadorBody(wrap);
         }
-        renderTrabajadorBody(wrap);
       };
       card.appendChild(optEl);
     });
