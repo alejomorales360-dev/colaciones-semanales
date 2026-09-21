@@ -327,7 +327,7 @@ function renderLogin(){
 
   const picker = el('div',{class:'role-picker'});
   const bT = el('button',{class:'role-card active'});
-  bT.append(el('div',{class:'role-icon'},'🧑‍🍳'), el('div',{class:'role-label'},'Trabajador/a'), el('div',{class:'role-desc'},'Anótate con tu RUT'));
+  bT.append(el('div',{class:'role-icon'},'👷'), el('div',{class:'role-label'},'Trabajador/a'), el('div',{class:'role-desc'},'Anótate con tu RUT'));
   const bA = el('button',{class:'role-card'});
   bA.append(el('div',{class:'role-icon'},'🔐'), el('div',{class:'role-label'},'Administración'), el('div',{class:'role-desc'},'Menús y reportes'));
   picker.append(bT,bA);
@@ -351,8 +351,10 @@ function renderLogin(){
   card.append(formT, formA, msgBox);
   wrap.appendChild(card);
 
-  bT.onclick = ()=>{ bT.classList.add('active'); bA.classList.remove('active','role-admin'); formT.hidden=false; formA.hidden=true; msgBox.innerHTML=''; };
-  bA.onclick = ()=>{ bA.classList.add('active','role-admin'); bT.classList.remove('active'); formA.hidden=false; formT.hidden=true; msgBox.innerHTML=''; };
+  // Enfoca el campo del formulario recién mostrado: en el celular ahorra un
+  // toque extra antes de poder escribir.
+  bT.onclick = ()=>{ bT.classList.add('active'); bA.classList.remove('active','role-admin'); formT.hidden=false; formA.hidden=true; msgBox.innerHTML=''; formT.querySelector('input').focus(); };
+  bA.onclick = ()=>{ bA.classList.add('active','role-admin'); bT.classList.remove('active'); formA.hidden=false; formT.hidden=true; msgBox.innerHTML=''; formA.querySelector('input').focus(); };
 
   // onsubmit (no solo onclick del botón): al ser un <form> real con un botón
   // type="submit", esto también captura Enter dentro del campo, y es lo que
@@ -397,6 +399,10 @@ function renderLogin(){
     state.semanaRef = proximaSemanaAbierta(res.config);
     render();
   };
+
+  // El foco inicial se pone recién cuando el nodo ya está en el DOM (justo
+  // después de este return), si no el navegador lo ignora.
+  setTimeout(()=>{ const i = formT.querySelector('input'); if(i) i.focus(); }, 0);
 
   return wrap;
 }
