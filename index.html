@@ -250,6 +250,17 @@ function fmtCierre(d){
 }
 
 // ---------- API ----------
+// fetch() no tiene timeout propio: si la conexión se cuelga a medias (típico
+// en celulares con mala señal), la promesa de fetch no se resuelve NI se
+// rechaza nunca, y el .catch(jsonp) de más abajo jamás se alcanza — el botón
+// que espera la respuesta queda pegado para siempre. Por eso todo fetch al
+// backend va con un AbortController con límite de tiempo, para garantizar
+// que siempre caiga al respaldo JSONP en un plazo acotado.
+function fetchConTimeout(url, opciones, msTimeout){
+  const controlador = new AbortController();
+  const timer = setTimeout(()=> controlador.abort(), msTimeout);
+  return fetch(url, {...(opciones||{}), signal: controlador.signal}).finally(()=> clearTimeout(timer));
+}
 function callApi(body){
   if(!GAS_URL || GAS_URL.indexOf('PEGA_AQUI') === 0){
     return Promise.resolve({ok:false, error:'Falta configurar GAS_URL en index.html.'});
@@ -258,11 +269,11 @@ function callApi(body){
   // ACCIONES_ADMIN en Colaciones.gs): sin ella, cualquiera que descubra la
   // URL /exec podría editar datos sin haber iniciado sesión como admin.
   if(state.role==='admin' && state.adminPassword) body = {...body, adminPassword: state.adminPassword};
-  return fetch(GAS_URL, {
+  return fetchConTimeout(GAS_URL, {
     method:'POST',
     headers:{'Content-Type':'text/plain;charset=utf-8'},
     body: JSON.stringify(body)
-  }).then(r=>r.json()).catch(()=> jsonp(body));
+  }, 9000).then(r=>r.json()).catch(()=> jsonp(body));
 }
 function jsonp(body){
   return new Promise((resolve)=>{
@@ -407,7 +418,7 @@ function topHeader(title, who, onExit, onRefrescar, opts){
 // Vuelve a traer trabajadores/menus/pedidos/platos/config sin cerrar
 // sesión (para el botón 🔄 Actualizar del panel de admin).
 function fetchTodoAdmin(){
-  return fetch(GAS_URL).then(r=>r.json()).catch(()=> jsonp());
+  return fetchConTimeout(GAS_URL, {}, 9000).then(r=>r.json()).catch(()=> jsonp());
 }
 
 // ============================================================
@@ -681,14 +692,21 @@ function buildCierreConfigBody(card){
     const fechaElegida = new Date(inpFecha.value+'T00:00:00');
     const dias = Math.round((mondayOf(state.semanaRef) - fechaElegida) / 86400000);
     btnGuardar.disabled = true;
-    const r1 = await callApi({action:'guardarConfig', clave:'cierre_dias_antes', valor:dias});
-    const r2 = await callApi({action:'guardarConfig', clave:'cierre_hora', valor:hora});
+    let r1 = await callApi({action:'guardarConfig', clave:'cierre_dias_antes', valor:dias});
+    let r2 = await callApi({action:'guardarConfig', clave:'cierre_hora', valor:hora});
+    // Son dos guardados independientes en el backend: si uno falla a mitad
+    // de camino, reintentar solo el que falló para no dejar el servidor con
+    // una combinación de fecha/hora que no corresponde a lo que se pidió.
+    if(r1.ok && !r2.ok) r2 = await callApi({action:'guardarConfig', clave:'cierre_hora', valor:hora});
+    else if(!r1.ok && r2.ok) r1 = await callApi({action:'guardarConfig', clave:'cierre_dias_antes', valor:dias});
     btnGuardar.disabled = false;
     msgBox.innerHTML='';
+    if(r1.ok) state.data.config.cierre_dias_antes = dias;
+    if(r2.ok) state.data.config.cierre_hora = hora;
     if(r1.ok && r2.ok){
-      state.data.config.cierre_dias_antes = dias;
-      state.data.config.cierre_hora = hora;
       render();
+    } else if(r1.ok || r2.ok){
+      msgBox.appendChild(el('div',{class:'msg err'}, 'Se guardó solo parte del cambio (' + (r1.ok?'fecha OK, hora falló':'hora OK, fecha falló') + '). Vuelve a intentar para completar.'));
     } else {
       msgBox.appendChild(el('div',{class:'msg err'}, r1.error||r2.error||'No se pudo guardar.'));
     }
@@ -955,7 +973,10 @@ function renderAdminMenu(){
       const guardarDescEsp = async ()=>{
         const descripcionEspecial = inpDescEsp.value.trim();
         if(descripcionEspecial === inpDescEsp.dataset.guardado) return;
+        if(inpDescEsp.dataset.busy==='1') return;
+        inpDescEsp.dataset.busy = '1';
         btnSaveEsp.disabled = true;
+        inpDescEsp.disabled = true;
         try{
           const res = await callApi({action:'marcarDiaEspecial', semana, dia, especial:true, descripcionEspecial});
           if(res.ok){
@@ -966,7 +987,9 @@ function renderAdminMenu(){
         } catch(err){
           alert('No se pudo conectar al servidor.');
         } finally {
-          btnSaveEsp.disabled = false;
+          inpDescEsp.dataset.busy = '';
+          btnSaveEsp.disabled = bloqueado;
+          inpDescEsp.disabled = bloqueado;
         }
       };
       inpDescEsp.dataset.guardado = descripcionGuardada;
