@@ -46,6 +46,11 @@
 //       publicada (compatibilidad con semanas armadas antes de este
 //       control). La primera opcion que se guarda para una semana nueva la
 //       deja automaticamente en borrador.
+//   Feriados: Semana | Dia
+//     - Marca un dia especifico de una semana como feriado (no se trabaja
+//       ese dia): los trabajadores dejan de ver/poder elegir ese dia y no se
+//       cuenta colacion. Al marcar un dia como feriado se borran los
+//       pedidos que ya existieran ahi, porque ese dia no habra colacion.
 
 const HOJAS_COL = {
   TRABAJADORES: 'Trabajadores',
@@ -53,7 +58,8 @@ const HOJAS_COL = {
   PEDIDOS: 'Pedidos',
   CONFIG: 'Config',
   PLATOS: 'Platos',
-  SEMANAS: 'Semanas'
+  SEMANAS: 'Semanas',
+  FERIADOS: 'Feriados'
 };
 
 function doGet(e) {
@@ -92,7 +98,7 @@ function doPost(e) {
 // Ahora cada una exige la clave vigente en Config junto con la peticion.
 const ACCIONES_SOLO_ADMIN_COL = [
   'guardarTrabajador', 'eliminarTrabajador', 'guardarMenu', 'eliminarMenu',
-  'marcarDiaEspecial', 'marcarSemanaPublicada', 'guardarConfig', 'eliminarPlato'
+  'marcarDiaEspecial', 'marcarSemanaPublicada', 'marcarFeriado', 'guardarConfig', 'eliminarPlato'
 ];
 function claveAdminValidaCol(password) {
   const clave = String(configCacheadoCol().admin_password || '').trim();
@@ -121,6 +127,8 @@ function procesarAccionCol(body) {
       return marcarDiaEspecialCol(body.semana, body.dia, body.especial, body.descripcionEspecial);
     case 'marcarSemanaPublicada':
       return marcarSemanaPublicadaCol(body.semana, body.publicada);
+    case 'marcarFeriado':
+      return marcarFeriadoCol(body.semana, body.dia, body.feriado);
     case 'guardarPedido':
       return guardarPedidoCol(body.data);
     case 'eliminarPedido':
@@ -182,6 +190,11 @@ function menusCacheadosCol() { return cacheColLeer_('menus', 15, menusAObjetosCo
 function platosCacheadosCol() { return cacheColLeer_('platos', 30, listarPlatosCol); }
 function configCacheadoCol() { return cacheColLeer_('config', 20, obtenerConfigCol, v => v && Object.keys(v).length > 0); }
 function pedidosCacheadosCol() { return cacheColLeer_('pedidos', 5, () => hojaAObjetosCol(HOJAS_COL.PEDIDOS)); }
+function feriadosCacheadosCol() {
+  return cacheColLeer_('feriados', 20, () => {
+    try { return hojaAObjetosCol(HOJAS_COL.FERIADOS); } catch (err) { return []; }
+  });
+}
 // Un solo candado para todo el script: evita que dos personas escribiendo
 // pedidos/menus al mismo tiempo se pisen (por ejemplo, dos filas para el
 // mismo dia y persona si sus peticiones se entrelazan). Con 50 personas
@@ -299,6 +312,7 @@ function obtenerTodoCol() {
     platos: platosCacheadosCol(),
     config: configSinClaveCol(configCacheadoCol()),
     semanas: semanasCacheadasCol(),
+    feriados: feriadosCacheadosCol(),
     timestamp: new Date().toISOString()
   };
 }
@@ -388,7 +402,8 @@ function verificarLoginAdminCol(password) {
     pedidos: pedidosCacheadosCol(),
     platos: platosCacheadosCol(),
     config: configSinClaveCol(cfg),
-    semanas: semanasCacheadasCol()
+    semanas: semanasCacheadasCol(),
+    feriados: feriadosCacheadosCol()
   };
 }
 
@@ -629,6 +644,57 @@ function marcarSemanaPublicadaCol(semana, publicada) {
   });
 }
 
+// --- FERIADOS ---
+// A diferencia del dia "especial", un feriado no depende de que ya exista
+// una opcion de menu para ese dia: el admin puede marcarlo apenas sepa que
+// no se trabaja, incluso antes de armar el menu de esa semana.
+function getOCrearHojaFeriadosCol_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let h = ss.getSheetByName(HOJAS_COL.FERIADOS);
+  if (!h) {
+    h = ss.insertSheet(HOJAS_COL.FERIADOS);
+    h.appendRow(['Semana', 'Dia']);
+  }
+  return h;
+}
+function diaEsFeriadoCol(semana, dia) {
+  return feriadosCacheadosCol().some(f =>
+    mismaFechaCol(f.semana, semana) && String(f.dia).trim() === String(dia).trim());
+}
+function marcarFeriadoCol(semana, dia, feriado) {
+  if (!semana || !dia) return { ok: false, error: 'Faltan datos del dia' };
+  return conCandadoCol_(() => {
+    const h = getOCrearHojaFeriadosCol_();
+    const v = h.getDataRange().getValues();
+    let yaEstaba = false;
+    for (let i = v.length - 1; i >= 1; i--) {
+      if (mismaFechaCol(v[i][0], semana) && String(v[i][1]).trim() === String(dia).trim()) {
+        yaEstaba = true;
+        if (!feriado) h.deleteRow(i + 1);
+      }
+    }
+    if (feriado && !yaEstaba) h.appendRow([semana, dia]);
+    cacheColInvalidar_('feriados');
+    let pedidosBorrados = 0;
+    // Un feriado significa que ese dia no hay colacion: cualquier pedido que
+    // ya existiera ahi (de antes de marcarlo feriado) queda sin sentido y se
+    // borra, para que el conteo/reporte no arrastre pedidos de un dia que no
+    // se va a trabajar.
+    if (feriado) {
+      const hp = getHojaCol(HOJAS_COL.PEDIDOS);
+      const vp = hp.getDataRange().getValues();
+      for (let i = vp.length - 1; i >= 1; i--) {
+        if (mismaFechaCol(vp[i][1], semana) && String(vp[i][4]).trim() === String(dia).trim()) {
+          hp.deleteRow(i + 1);
+          pedidosBorrados++;
+        }
+      }
+      if (pedidosBorrados) cacheColInvalidar_('pedidos');
+    }
+    return { ok: true, pedidosBorrados: pedidosBorrados };
+  });
+}
+
 // --- PEDIDOS ---
 // Un trabajador solo puede tener UNA opcion elegida por dia dentro de la
 // misma semana: si ya existe una fila para (semana, rut, dia) se actualiza
@@ -642,6 +708,9 @@ function guardarPedidoCol(data) {
   }
   if (!data.asAdmin && !semanaPublicadaCol(data.semana)) {
     return { ok: false, error: 'El menu de esta semana todavia no esta publicado.' };
+  }
+  if (!data.asAdmin && diaEsFeriadoCol(data.semana, data.dia)) {
+    return { ok: false, error: 'Ese día es feriado, no hay colación.' };
   }
   return conCandadoCol_(() => {
     const h = getHojaCol(HOJAS_COL.PEDIDOS);
@@ -700,7 +769,8 @@ function loginTrabajadorCol(rutIngresado) {
     trabajador: { rut: String(t.rut), nombre: String(t.nombre), tipo: String(t.tipo || 'Fijo') },
     menus: menusPublicadosCol(menusCacheadosCol()),
     pedidos: misPedidos,
-    config: configSinClaveCol(configCacheadoCol())
+    config: configSinClaveCol(configCacheadoCol()),
+    feriados: feriadosCacheadosCol()
   };
 }
 
@@ -722,7 +792,8 @@ function crearHojasIniciales() {
     Pedidos: ['ID', 'Semana', 'RUT', 'Nombre', 'Dia', 'Opcion', 'Timestamp'],
     Config: ['Clave', 'Valor'],
     Platos: ['Nombre'],
-    Semanas: ['Semana', 'Publicada']
+    Semanas: ['Semana', 'Publicada'],
+    Feriados: ['Semana', 'Dia']
   };
   Object.keys(specs).forEach(nombre => {
     let h = ss.getSheetByName(nombre);

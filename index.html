@@ -121,6 +121,7 @@ tr:hover td{background:var(--bg2)}
 .day-card h3{font-size:13.5px;font-weight:800;margin-bottom:8px;text-transform:capitalize;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .day-card.especial{border-color:var(--amber);border-width:2px;background:var(--am2)}
 .card.especial{border-color:var(--amber);border-width:2px}
+.card.feriado{border-color:var(--red);border-width:2px}
 .pill.especial{background:var(--amber);color:#fff}
 .opt{display:flex;align-items:flex-start;gap:10px;padding:13px 12px;border:1px solid var(--bd);border-radius:var(--r);margin-bottom:8px;cursor:pointer;min-height:44px}
 .opt:hover{background:var(--bg2)}
@@ -171,7 +172,7 @@ const state = {
   admin: false,
   adminPassword: null, // solo en memoria (no se guarda), para autorizar acciones de admin en el backend
   trabajador: null,  // {rut,nombre,tipo}
-  data: { trabajadores:[], menus:[], pedidos:[], config:{}, semanas:[] },
+  data: { trabajadores:[], menus:[], pedidos:[], config:{}, semanas:[], feriados:[] },
   semanaRef: mondayOf(new Date()),
   adminTab: 'trabajadores',
   msg: null,
@@ -368,6 +369,7 @@ function renderLogin(){
     state.data.menus = res.menus||[];
     state.data.pedidos = res.pedidos||[];
     state.data.config = res.config||{};
+    state.data.feriados = res.feriados||[];
     render();
   };
   formT.querySelector('input').addEventListener('keydown', e=>{ if(e.key==='Enter') btnT.click(); });
@@ -480,7 +482,11 @@ function renderTrabajadorBody(wrap){
     wrap.appendChild(el('div',{class:'msg info'}, `⏰ Puedes elegir o cambiar tu opción hasta el ${fmtCierre(calcularCierre(state.semanaRef, state.data.config))}.`));
   }
 
-  const diasConMenu = DIAS.filter(d=>menusSemana.some(m=>m.dia===d));
+  const diasFeriadosSemana = DIAS.filter(d=>diaEsFeriado(semana,d));
+  if(diasFeriadosSemana.length){
+    wrap.appendChild(el('div',{class:'msg info'}, `🎉 ${diasFeriadosSemana.join(', ')} ${diasFeriadosSemana.length===1?'es feriado':'son feriados'} esta semana: no hay colación ese${diasFeriadosSemana.length===1?'':'s'} día${diasFeriadosSemana.length===1?'':'s'}.`));
+  }
+  const diasConMenu = DIAS.filter(d=>menusSemana.some(m=>m.dia===d) && !diaEsFeriado(semana,d));
   diasConMenu.forEach(dia=>{
     const opciones = menusSemana.filter(m=>m.dia===dia);
     const especial = esDiaEspecial(opciones);
@@ -605,6 +611,9 @@ function semanaEstaPublicada(semanaIso){
   const fila = (state.data.semanas||[]).find(f=>String(f.semana).trim()===semanaIso);
   if(!fila) return false;
   return String(fila.publicada||'').toLowerCase()==='si';
+}
+function diaEsFeriado(semanaIso, dia){
+  return (state.data.feriados||[]).some(f=>String(f.semana).trim()===semanaIso && String(f.dia).trim()===dia);
 }
 function descripcionEspecialDia(opciones){
   const o = opciones.find(o=>String(o.especial||'').toLowerCase()==='si' && o.descripcionespecial);
@@ -920,9 +929,51 @@ function renderAdminMenu(){
     const opciones = state.data.menus.filter(m=>m.semana===semana && m.dia===dia);
     opciones.sort((a,b)=>String(a.opcion).localeCompare(String(b.opcion)));
     const especial = esDiaEspecial(opciones);
-    const card = el('div',{class:'card'+(especial?' especial':'')});
+    const feriado = diaEsFeriado(semana, dia);
+    const card = el('div',{class:'card'+(especial?' especial':'')+(feriado?' feriado':'')});
     const head = el('div',{class:'row',style:'justify-content:space-between'});
-    head.appendChild(el('h2',{}, dia + (especial?' 🌟':'')));
+    head.appendChild(el('h2',{}, dia + (especial?' 🌟':'') + (feriado?' 🎉':'')));
+    const lblFer = el('label',{style:'display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--red);cursor:pointer'});
+    const chkFer = el('input',{type:'checkbox'});
+    chkFer.checked = feriado;
+    chkFer.disabled = bloqueado;
+    lblFer.append(chkFer, document.createTextNode('🎉 Feriado (no se trabaja)'));
+    chkFer.onchange = async ()=>{
+      const nuevoValor = chkFer.checked;
+      if(nuevoValor){
+        const pedidosDelDia = state.data.pedidos.filter(p=>p.semana===semana && p.dia===dia).length;
+        if(pedidosDelDia>0 && !confirm(`Ya hay ${pedidosDelDia} pedido${pedidosDelDia===1?'':'s'} anotado${pedidosDelDia===1?'':'s'} para ${dia}. Al marcarlo feriado se eliminarán, porque ese día no habrá colación. ¿Continuar?`)){
+          chkFer.checked = false;
+          return;
+        }
+      }
+      chkFer.disabled = true;
+      try{
+        const res = await callApi({action:'marcarFeriado', semana, dia, feriado:nuevoValor});
+        if(res && res.ok){
+          const idx = state.data.feriados.findIndex(f=>String(f.semana).trim()===semana && String(f.dia).trim()===dia);
+          if(nuevoValor){ if(idx<0) state.data.feriados.push({semana,dia}); }
+          else if(idx>=0) state.data.feriados.splice(idx,1);
+          if(nuevoValor) state.data.pedidos = state.data.pedidos.filter(p=>!(p.semana===semana && p.dia===dia));
+        } else {
+          alert((res&&res.error)||'Error');
+        }
+      } catch(err){
+        alert('No se pudo conectar al servidor.');
+      } finally {
+        // Igual que con "especial": siempre se vuelve a dibujar para que el
+        // casillero refleje el estado real del servidor, funcione o no.
+        render();
+      }
+    };
+    head.appendChild(lblFer);
+    if(feriado){
+      card.appendChild(head);
+      card.appendChild(el('div',{class:'msg info',style:'margin-bottom:0'},
+        '🎉 Este día quedó marcado como feriado: no se trabaja, así que no habrá colación ni se les mostrará a los trabajadores como opción para anotarse.'));
+      box.appendChild(card);
+      return;
+    }
     if(opciones.length){
       const lblEsp = el('label',{style:'display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--amber);cursor:pointer'});
       const chkEsp = el('input',{type:'checkbox'});
@@ -1080,8 +1131,11 @@ function renderAdminMenu(){
 function datosSemana(semanaIso){
   const semanaRef = new Date(semanaIso+'T00:00:00');
   const finSemana = iso(addDays(semanaRef,4));
-  const menusSemana = state.data.menus.filter(m=>m.semana===semanaIso);
-  const pedidosSemana = state.data.pedidos.filter(p=>p.semana===semanaIso);
+  // Un día feriado no se cuenta como colación: se excluye de los menús de la
+  // semana para que reportes, recordatorios y el desglose Sodexo no lo
+  // traten como un día pendiente de anotarse.
+  const menusSemana = state.data.menus.filter(m=>m.semana===semanaIso && !diaEsFeriado(semanaIso, m.dia));
+  const pedidosSemana = state.data.pedidos.filter(p=>p.semana===semanaIso && !diaEsFeriado(semanaIso, p.dia));
   const elegibles = state.data.trabajadores.filter(t=>{
     if(String(t.activo).toLowerCase()!=='si') return false;
     if(String(t.tipo)!=='Spot') return true;
