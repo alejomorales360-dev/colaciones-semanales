@@ -587,13 +587,13 @@ function totalColacionesSemana(pedidosSemana, menusSemana){
   return pedidosSemana.filter(p=>!esPedidoAusente(p, menusSemana)).length;
 }
 function esDiaEspecial(opciones){ return opciones.some(o=>String(o.especial||'').toLowerCase()==='si'); }
-// Una semana sin fila en state.data.semanas se considera publicada (misma
-// regla que el backend): compatibilidad con semanas armadas antes de este
-// control, para no ocultarle a nadie un menú que ya estaba visible.
+// Por defecto BORRADOR (misma regla que el backend): una semana sin fila
+// en state.data.semanas se considera NO publicada. Solo se ve publicada si
+// hay una fila explícita "Si" — el admin siempre debe publicar a mano.
 function semanaEstaPublicada(semanaIso){
   const fila = (state.data.semanas||[]).find(f=>String(f.semana).trim()===semanaIso);
-  if(!fila) return true;
-  return String(fila.publicada||'').toLowerCase()!=='no';
+  if(!fila) return false;
+  return String(fila.publicada||'').toLowerCase()==='si';
 }
 function descripcionEspecialDia(opciones){
   const o = opciones.find(o=>String(o.especial||'').toLowerCase()==='si' && o.descripcionespecial);

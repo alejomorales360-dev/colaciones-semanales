@@ -581,10 +581,16 @@ function semanasCacheadasCol() {
 // Una semana sin fila en Semanas se considera publicada (compatibilidad
 // con semanas armadas antes de este control, para no ocultarle a nadie un
 // menu que ya estaba visible).
+// Por defecto BORRADOR: una semana sin fila en Semanas (nunca publicada) se
+// considera NO publicada. Solo se ve publicada si hay una fila explicita
+// con "Si". Esto significa que cualquier semana armada antes de correr
+// agregarHojaSemanas() -incluida la semana ya lista para lanzamiento- debe
+// quedar marcada explicitamente "Si" en esa migracion, o el admin debe
+// publicarla a mano; si no, los trabajadores no la veran.
 function semanaPublicadaCol(semana) {
   const fila = semanasCacheadasCol().find(f => mismaFechaCol(f.semana, semana));
-  if (!fila) return true;
-  return String(fila.publicada || '').toLowerCase() !== 'no';
+  if (!fila) return false;
+  return String(fila.publicada || '').toLowerCase() === 'si';
 }
 // A diferencia de getHojaCol, esta crea la hoja "Semanas" sola si todavia
 // no existe (ej. una planilla que venia de antes de este control y nunca
