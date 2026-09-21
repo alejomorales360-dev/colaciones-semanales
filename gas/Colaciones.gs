@@ -38,13 +38,22 @@
 //       armar el menu en vez de escribirlos de nuevo. Se llena solo: cada
 //       vez que se guarda una opcion de menu con una descripcion nueva, se
 //       agrega aqui si no existia (sin duplicados, sin distinguir mayus).
+//   Semanas: Semana | Publicada
+//     - Controla si los trabajadores ya pueden ver el menu de esa semana.
+//       El admin puede ir guardando el menu de a poco (queda en borrador,
+//       "Publicada"="No") y solo cuando aprieta "Publicar semana" los
+//       trabajadores lo ven. Una semana sin fila aqui se considera
+//       publicada (compatibilidad con semanas armadas antes de este
+//       control). La primera opcion que se guarda para una semana nueva la
+//       deja automaticamente en borrador.
 
 const HOJAS_COL = {
   TRABAJADORES: 'Trabajadores',
   MENUS: 'Menus',
   PEDIDOS: 'Pedidos',
   CONFIG: 'Config',
-  PLATOS: 'Platos'
+  PLATOS: 'Platos',
+  SEMANAS: 'Semanas'
 };
 
 function doGet(e) {
@@ -83,7 +92,7 @@ function doPost(e) {
 // Ahora cada una exige la clave vigente en Config junto con la peticion.
 const ACCIONES_SOLO_ADMIN_COL = [
   'guardarTrabajador', 'eliminarTrabajador', 'guardarMenu', 'eliminarMenu',
-  'marcarDiaEspecial', 'copiarMenuSemana', 'guardarConfig', 'eliminarPlato'
+  'marcarDiaEspecial', 'marcarSemanaPublicada', 'guardarConfig', 'eliminarPlato'
 ];
 function claveAdminValidaCol(password) {
   const clave = String(configCacheadoCol().admin_password || '').trim();
@@ -110,8 +119,8 @@ function procesarAccionCol(body) {
       return eliminarMenuCol(body.semana, body.dia, body.opcion);
     case 'marcarDiaEspecial':
       return marcarDiaEspecialCol(body.semana, body.dia, body.especial, body.descripcionEspecial);
-    case 'copiarMenuSemana':
-      return copiarMenuSemanaCol(body.semanaOrigen, body.semanaDestino);
+    case 'marcarSemanaPublicada':
+      return marcarSemanaPublicadaCol(body.semana, body.publicada);
     case 'guardarPedido':
       return guardarPedidoCol(body.data);
     case 'eliminarPedido':
@@ -265,6 +274,22 @@ function menusAObjetosCol() {
       descripcionespecial: f[6] != null ? f[6] : ''
     }));
 }
+// Nunca se manda admin_password al navegador: obtenerTodoCol() responde a
+// una peticion GET simple sin ninguna autenticacion (es el "?" o el boton
+// Actualizar del admin), asi que si se filtrara ahi, cualquiera con la URL
+// del script -visible igual en el codigo de la pagina- podria leer la
+// clave de administrador en texto plano.
+function configSinClaveCol(cfg) {
+  const copia = Object.assign({}, cfg);
+  delete copia.admin_password;
+  return copia;
+}
+// A los trabajadores solo se les manda el menu de semanas ya publicadas
+// (ver semanaPublicadaCol): una semana en borrador no debe ni llegar a su
+// navegador, no solo estar oculta en la pantalla.
+function menusPublicadosCol(menus) {
+  return menus.filter(m => semanaPublicadaCol(m.semana));
+}
 function obtenerTodoCol() {
   return {
     ok: true,
@@ -272,7 +297,8 @@ function obtenerTodoCol() {
     menus: menusCacheadosCol(),
     pedidos: pedidosCacheadosCol(),
     platos: platosCacheadosCol(),
-    config: configCacheadoCol(),
+    config: configSinClaveCol(configCacheadoCol()),
+    semanas: semanasCacheadasCol(),
     timestamp: new Date().toISOString()
   };
 }
@@ -361,7 +387,8 @@ function verificarLoginAdminCol(password) {
     menus: menusCacheadosCol(),
     pedidos: pedidosCacheadosCol(),
     platos: platosCacheadosCol(),
-    config: cfg
+    config: configSinClaveCol(cfg),
+    semanas: semanasCacheadasCol()
   };
 }
 
@@ -482,11 +509,14 @@ function guardarMenuCol(data) {
     // almuerzo mejorado.
     let especialDelDia = 'No';
     let descripcionEspecialDelDia = '';
+    let semanaYaTeniaMenu = false;
     for (let i = 1; i < v.length; i++) {
-      if (mismaFechaCol(v[i][0], data.semana) && String(v[i][1]).trim() === String(data.dia).trim() && String(v[i][5]).trim() === 'Si') {
-        especialDelDia = 'Si';
-        descripcionEspecialDelDia = String(v[i][6] || '');
-        break;
+      if (mismaFechaCol(v[i][0], data.semana)) {
+        semanaYaTeniaMenu = true;
+        if (String(v[i][1]).trim() === String(data.dia).trim() && String(v[i][5]).trim() === 'Si') {
+          especialDelDia = 'Si';
+          descripcionEspecialDelDia = String(v[i][6] || '');
+        }
       }
     }
     h.appendRow([
@@ -497,6 +527,13 @@ function guardarMenuCol(data) {
       descripcionEspecialDelDia
     ]);
     cacheColInvalidar_('menus');
+    // Primera opcion que se guarda para esta semana: parte en borrador, el
+    // admin debe publicarla para que los trabajadores la vean. Si la
+    // semana ya tenia alguna fila de Semanas (publicada o no), se respeta
+    // ese estado y no se toca.
+    if (!semanaYaTeniaMenu && !semanasCacheadasCol().some(f => mismaFechaCol(f.semana, data.semana))) {
+      marcarSemanaPublicadaInterno_(data.semana, false);
+    }
     return { ok: true, creado: true };
   });
 }
@@ -535,33 +572,54 @@ function eliminarMenuCol(semana, dia, opcion) {
     return { ok: false, error: 'Opcion de menu no encontrada' };
   });
 }
-function copiarMenuSemanaCol(semanaOrigen, semanaDestino) {
-  if (!semanaOrigen || !semanaDestino) return { ok: false, error: 'Faltan semanas' };
+// --- SEMANAS (borrador / publicada) ---
+function semanasCacheadasCol() {
+  return cacheColLeer_('semanas', 20, () => {
+    try { return hojaAObjetosCol(HOJAS_COL.SEMANAS); } catch (err) { return []; }
+  });
+}
+// Una semana sin fila en Semanas se considera publicada (compatibilidad
+// con semanas armadas antes de este control, para no ocultarle a nadie un
+// menu que ya estaba visible).
+function semanaPublicadaCol(semana) {
+  const fila = semanasCacheadasCol().find(f => mismaFechaCol(f.semana, semana));
+  if (!fila) return true;
+  return String(fila.publicada || '').toLowerCase() !== 'no';
+}
+// A diferencia de getHojaCol, esta crea la hoja "Semanas" sola si todavia
+// no existe (ej. una planilla que venia de antes de este control y nunca
+// corrio la migracion agregarHojaSemanas): asi publicar/despublicar nunca
+// falla por un paso de configuracion olvidado.
+function getOCrearHojaSemanasCol_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let h = ss.getSheetByName(HOJAS_COL.SEMANAS);
+  if (!h) {
+    h = ss.insertSheet(HOJAS_COL.SEMANAS);
+    h.appendRow(['Semana', 'Publicada']);
+  }
+  return h;
+}
+// Version SIN candado propio, para llamar desde codigo que YA sostiene el
+// candado del script (ej. guardarMenuCol al crear una semana nueva).
+function marcarSemanaPublicadaInterno_(semana, publicada) {
+  const h = getOCrearHojaSemanasCol_();
+  const v = h.getDataRange().getValues();
+  const valor = publicada ? 'Si' : 'No';
+  for (let i = 1; i < v.length; i++) {
+    if (mismaFechaCol(v[i][0], semana)) {
+      h.getRange(i + 1, 2).setValue(valor);
+      cacheColInvalidar_('semanas');
+      return;
+    }
+  }
+  h.appendRow([semana, valor]);
+  cacheColInvalidar_('semanas');
+}
+function marcarSemanaPublicadaCol(semana, publicada) {
+  if (!semana) return { ok: false, error: 'Falta la semana' };
   return conCandadoCol_(() => {
-    const h = getHojaCol(HOJAS_COL.MENUS);
-    const v = h.getDataRange().getValues();
-    // Evita duplicar filas si ya existe menu en la semana destino (ej. el
-    // admin hace doble clic, o reintenta tras una respuesta que parecia
-    // no haber llegado): salta las combinaciones dia+opcion que ya existan.
-    const yaExisteDestino = new Set();
-    for (let i = 1; i < v.length; i++) {
-      if (mismaFechaCol(v[i][0], semanaDestino)) {
-        yaExisteDestino.add(String(v[i][1]).trim() + '|' + String(v[i][2]).trim());
-      }
-    }
-    let copiadas = 0;
-    const nuevasFilas = [];
-    for (let i = 1; i < v.length; i++) {
-      if (mismaFechaCol(v[i][0], semanaOrigen)) {
-        const clave = String(v[i][1]).trim() + '|' + String(v[i][2]).trim();
-        if (yaExisteDestino.has(clave)) continue;
-        nuevasFilas.push([semanaDestino, v[i][1], v[i][2], v[i][3], v[i][4], v[i][5] || 'No']);
-        copiadas++;
-      }
-    }
-    nuevasFilas.forEach(f => h.appendRow(f));
-    cacheColInvalidar_('menus');
-    return { ok: true, copiadas: copiadas };
+    marcarSemanaPublicadaInterno_(semana, publicada);
+    return { ok: true };
   });
 }
 
@@ -575,6 +633,9 @@ function guardarPedidoCol(data) {
   }
   if (!data.asAdmin && inscripcionesCerradasCol(data.semana)) {
     return { ok: false, error: 'El plazo para anotarse a esta semana ya cerro. Si necesitas hacer un cambio, contacta a administracion.', cerrado: true };
+  }
+  if (!data.asAdmin && !semanaPublicadaCol(data.semana)) {
+    return { ok: false, error: 'El menu de esta semana todavia no esta publicado.' };
   }
   return conCandadoCol_(() => {
     const h = getHojaCol(HOJAS_COL.PEDIDOS);
@@ -631,9 +692,9 @@ function loginTrabajadorCol(rutIngresado) {
   return {
     ok: true,
     trabajador: { rut: String(t.rut), nombre: String(t.nombre), tipo: String(t.tipo || 'Fijo') },
-    menus: menusCacheadosCol(),
+    menus: menusPublicadosCol(menusCacheadosCol()),
     pedidos: misPedidos,
-    config: configCacheadoCol()
+    config: configSinClaveCol(configCacheadoCol())
   };
 }
 
@@ -654,7 +715,8 @@ function crearHojasIniciales() {
     Menus: ['Semana', 'Dia', 'Opcion', 'Descripcion', 'Activo', 'Especial', 'DescripcionEspecial'],
     Pedidos: ['ID', 'Semana', 'RUT', 'Nombre', 'Dia', 'Opcion', 'Timestamp'],
     Config: ['Clave', 'Valor'],
-    Platos: ['Nombre']
+    Platos: ['Nombre'],
+    Semanas: ['Semana', 'Publicada']
   };
   Object.keys(specs).forEach(nombre => {
     let h = ss.getSheetByName(nombre);
@@ -732,4 +794,27 @@ function agregarHojaPlatos() {
     }
   });
   Logger.log('Hoja Platos lista. Platos agregados desde Menus: ' + agregados);
+}
+// Ejecutar UNA VEZ si tu planilla ya existia antes del control de
+// publicacion por semana. Crea la hoja "Semanas" si falta y marca como
+// publicadas (Si) todas las semanas que ya tengan menu armado, para que
+// nadie pierda de vista un menu que los trabajadores ya podian ver.
+function agregarHojaSemanas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let h = ss.getSheetByName(HOJAS_COL.SEMANAS);
+  if (!h) h = ss.insertSheet(HOJAS_COL.SEMANAS);
+  if (h.getLastRow() === 0) h.appendRow(['Semana', 'Publicada']);
+  const semanasExistentes = new Set(
+    hojaAObjetosCol(HOJAS_COL.SEMANAS).map(f => formatearFechaCol(f.semana))
+  );
+  const semanasConMenu = new Set(menusAObjetosCol().map(m => formatearFechaCol(m.semana)));
+  let agregadas = 0;
+  semanasConMenu.forEach(semana => {
+    if (!semanasExistentes.has(semana)) {
+      h.appendRow([semana, 'Si']);
+      agregadas++;
+    }
+  });
+  cacheColInvalidar_('semanas');
+  Logger.log('Hoja Semanas lista. Semanas marcadas como publicadas: ' + agregadas);
 }

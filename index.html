@@ -171,7 +171,7 @@ const state = {
   admin: false,
   adminPassword: null, // solo en memoria (no se guarda), para autorizar acciones de admin en el backend
   trabajador: null,  // {rut,nombre,tipo}
-  data: { trabajadores:[], menus:[], pedidos:[], config:{} },
+  data: { trabajadores:[], menus:[], pedidos:[], config:{}, semanas:[] },
   semanaRef: mondayOf(new Date()),
   adminTab: 'trabajadores',
   msg: null,
@@ -587,6 +587,14 @@ function totalColacionesSemana(pedidosSemana, menusSemana){
   return pedidosSemana.filter(p=>!esPedidoAusente(p, menusSemana)).length;
 }
 function esDiaEspecial(opciones){ return opciones.some(o=>String(o.especial||'').toLowerCase()==='si'); }
+// Una semana sin fila en state.data.semanas se considera publicada (misma
+// regla que el backend): compatibilidad con semanas armadas antes de este
+// control, para no ocultarle a nadie un menú que ya estaba visible.
+function semanaEstaPublicada(semanaIso){
+  const fila = (state.data.semanas||[]).find(f=>String(f.semana).trim()===semanaIso);
+  if(!fila) return true;
+  return String(fila.publicada||'').toLowerCase()!=='no';
+}
 function descripcionEspecialDia(opciones){
   const o = opciones.find(o=>String(o.especial||'').toLowerCase()==='si' && o.descripcionespecial);
   return o ? String(o.descripcionespecial) : '';
@@ -861,25 +869,35 @@ function renderAdminMenu(){
   }
   box.appendChild(bannerCierre);
 
-  const toolbar = el('div',{class:'toolbar no-print'});
-  const btnCopiar = el('button',{class:'btn'},'Copiar menú de la semana anterior');
-  btnCopiar.disabled = bloqueado;
-  btnCopiar.onclick = async ()=>{
-    const origen = iso(addDays(state.semanaRef,-7));
-    const destino = iso(state.semanaRef);
-    btnCopiar.disabled=true;
-    const res = await callApi({action:'copiarMenuSemana', semanaOrigen:origen, semanaDestino:destino});
-    btnCopiar.disabled=false;
-    if(res.ok){
-      const copiadas = state.data.menus.filter(m=>m.semana===origen).map(m=>({...m, semana:destino}));
-      state.data.menus.push(...copiadas);
-      render();
-    } else alert(res.error||'Error');
-  };
-  toolbar.appendChild(btnCopiar);
-  box.appendChild(toolbar);
-
   const semana = iso(state.semanaRef);
+  const publicada = semanaEstaPublicada(semana);
+  const hayMenuEstaSemana = state.data.menus.some(m=>m.semana===semana);
+  const bannerPublicar = el('div',{class:`msg ${publicada?'info':'cerrado'}`, style:'display:flex;align-items:center;gap:10px;flex-wrap:wrap'});
+  bannerPublicar.appendChild(document.createTextNode(
+    publicada ? '✅ Esta semana está publicada: los trabajadores ya pueden verla y anotarse.'
+               : '📝 Esta semana es un borrador: los trabajadores todavía NO la ven.'));
+  const btnPublicar = el('button',{class:`btn sm${publicada?'':' primary'}`}, publicada ? '🔒 Volver a borrador' : '📢 Publicar semana');
+  btnPublicar.disabled = !hayMenuEstaSemana;
+  btnPublicar.onclick = async ()=>{
+    btnPublicar.disabled = true;
+    try{
+      const res = await callApi({action:'marcarSemanaPublicada', semana, publicada: !publicada});
+      if(res && res.ok){
+        const idx = state.data.semanas.findIndex(f=>String(f.semana).trim()===semana);
+        const fila = {semana, publicada: (!publicada) ? 'Si':'No'};
+        if(idx>=0) state.data.semanas[idx]=fila; else state.data.semanas.push(fila);
+      } else {
+        alert((res&&res.error)||'No se pudo cambiar el estado de la semana.');
+      }
+    } catch(err){
+      alert('No se pudo conectar al servidor.');
+    } finally {
+      render();
+    }
+  };
+  bannerPublicar.appendChild(btnPublicar);
+  box.appendChild(bannerPublicar);
+
   DIAS.forEach(dia=>{
     const opciones = state.data.menus.filter(m=>m.semana===semana && m.dia===dia);
     opciones.sort((a,b)=>String(a.opcion).localeCompare(String(b.opcion)));
