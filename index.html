@@ -333,14 +333,18 @@ function renderLogin(){
   picker.append(bT,bA);
   card.appendChild(picker);
 
-  const formT = el('div',{class:'role-form'});
-  formT.appendChild(field('Tu RUT','text','loginRut','Ej: 12345678-9',true));
-  const btnT = el('button',{class:'btn primary',style:'width:100%;margin-top:6px'},'Ingresar');
+  // <form> reales (no solo divs) y autocomplete correcto en cada campo: es
+  // lo que le permite al navegador ofrecer "¿Guardar RUT/clave?" y
+  // autocompletarlos la próxima vez, en vez de tener que escribirlos de
+  // memoria cada semana.
+  const formT = el('form',{class:'role-form', autocomplete:'on'});
+  formT.appendChild(field('Tu RUT','text','loginRut','Ej: 12345678-9',true,'username'));
+  const btnT = el('button',{type:'submit',class:'btn primary',style:'width:100%;margin-top:6px'},'Ingresar');
   formT.appendChild(btnT);
 
-  const formA = el('div',{class:'role-form role-admin',hidden:'true'});
-  formA.appendChild(field('Clave de administración','password','loginPass',''));
-  const btnA = el('button',{class:'btn admin',style:'width:100%;margin-top:6px'},'Ingresar como admin');
+  const formA = el('form',{class:'role-form role-admin', autocomplete:'on', hidden:'true'});
+  formA.appendChild(fieldPassword('Clave de administración','loginPass','current-password'));
+  const btnA = el('button',{type:'submit',class:'btn admin',style:'width:100%;margin-top:6px'},'Ingresar como admin');
   formA.appendChild(btnA);
 
   const msgBox = el('div',{});
@@ -350,7 +354,11 @@ function renderLogin(){
   bT.onclick = ()=>{ bT.classList.add('active'); bA.classList.remove('active','role-admin'); formT.hidden=false; formA.hidden=true; msgBox.innerHTML=''; };
   bA.onclick = ()=>{ bA.classList.add('active','role-admin'); bT.classList.remove('active'); formA.hidden=false; formT.hidden=true; msgBox.innerHTML=''; };
 
-  btnT.onclick = async ()=>{
+  // onsubmit (no solo onclick del botón): al ser un <form> real con un botón
+  // type="submit", esto también captura Enter dentro del campo, y es lo que
+  // hace que el navegador reconozca el envío y ofrezca guardar el dato.
+  formT.onsubmit = async (e)=>{
+    e.preventDefault();
     const rut = card.querySelector('#loginRut').value.trim();
     if(!rut){ return; }
     btnT.disabled = true; btnT.textContent='Ingresando…';
@@ -372,9 +380,9 @@ function renderLogin(){
     state.data.feriados = res.feriados||[];
     render();
   };
-  formT.querySelector('input').addEventListener('keydown', e=>{ if(e.key==='Enter') btnT.click(); });
 
-  btnA.onclick = async ()=>{
+  formA.onsubmit = async (e)=>{
+    e.preventDefault();
     const pass = card.querySelector('#loginPass').value;
     btnA.disabled = true; btnA.textContent='Ingresando…';
     const res = await callApi({action:'loginAdmin', password:pass});
@@ -389,7 +397,6 @@ function renderLogin(){
     state.semanaRef = proximaSemanaAbierta(res.config);
     render();
   };
-  formA.querySelector('input').addEventListener('keydown', e=>{ if(e.key==='Enter') btnA.click(); });
 
   return wrap;
 }
@@ -2110,14 +2117,37 @@ function el(tag, attrs, ...children){
   });
   return n;
 }
-function field(labelText, type, id, placeholder, isRut){
+function field(labelText, type, id, placeholder, isRut, autocomplete){
   const f = el('div',{class:'field'});
   f.appendChild(el('label',{for:id}, labelText));
-  const attrs = {type, id, placeholder: placeholder||''};
+  const attrs = {type, id, name:id, placeholder: placeholder||''};
   if(isRut){ attrs.inputmode='text'; attrs.autocapitalize='characters'; attrs.maxlength='12'; }
+  if(autocomplete) attrs.autocomplete = autocomplete;
   const input = el('input',attrs);
   if(isRut) input.addEventListener('input', ()=>{ input.value = formatRut(input.value); });
   f.appendChild(input);
+  return f;
+}
+// Campo de clave con un botón de "ojo" para mostrar/ocultar el texto
+// mientras se escribe, y con autocomplete="current-password" para que el
+// navegador pueda ofrecer guardarla (evita que alguien la tenga que teclear
+// de memoria cada vez, y reduce errores de tipeo al no verla).
+function fieldPassword(labelText, id, autocomplete){
+  const f = el('div',{class:'field'});
+  f.appendChild(el('label',{for:id}, labelText));
+  const wrap = el('div',{style:'position:relative'});
+  const input = el('input',{type:'password', id, name:id, placeholder:'', autocomplete:autocomplete||'current-password', style:'padding-right:40px'});
+  const btnEye = el('button',{type:'button', 'aria-label':'Mostrar clave',
+    style:'position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:17px;padding:6px;line-height:1'},
+    '👁️');
+  btnEye.onclick = ()=>{
+    const mostrando = input.type==='text';
+    input.type = mostrando ? 'password' : 'text';
+    btnEye.textContent = mostrando ? '👁️' : '🙈';
+    btnEye.setAttribute('aria-label', mostrando ? 'Mostrar clave' : 'Ocultar clave');
+  };
+  wrap.append(input, btnEye);
+  f.appendChild(wrap);
   return f;
 }
 // Da formato XXXXXXXX-X a un RUT chileno mientras se escribe (acepta con o sin puntos/guion).
