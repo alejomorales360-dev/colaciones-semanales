@@ -47,6 +47,8 @@ button{cursor:pointer}
 .btn.ghost{border-color:transparent;background:transparent}
 .btn.sm{padding:7px 11px;font-size:12.5px;min-height:36px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
+.btn .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;vertical-align:-2px;margin-right:8px;animation:girar .7s linear infinite}
+@keyframes girar{to{transform:rotate(360deg)}}
 .card{background:var(--bg);border:1px solid var(--bd);border-left:5px solid var(--bd2);border-radius:var(--rl);padding:18px;box-shadow:var(--sh);margin-bottom:20px}
 .card.tone-ok{border-left-color:var(--green);background:linear-gradient(180deg,var(--gr2) 0%,var(--bg) 90px)}
 .card.tone-ok h2{color:var(--gr3)}
@@ -317,6 +319,20 @@ function render(){
   }
 }
 
+// Pone/quita un pequeño spinner girando dentro de un botón mientras dura una
+// petición, además de deshabilitarlo — más claro que solo cambiar el texto
+// en una conexión lenta (que es justamente cuando más se necesita el aviso).
+function setBotonCargando(btn, cargando, textoNormal, textoCargando){
+  if(cargando){
+    btn.disabled = true;
+    btn.innerHTML = '';
+    btn.appendChild(el('span',{class:'spinner'}));
+    btn.appendChild(document.createTextNode(textoCargando));
+  } else {
+    btn.disabled = false;
+    btn.textContent = textoNormal;
+  }
+}
 // ---------- LOGIN ----------
 function renderLogin(){
   const wrap = el('div',{class:'center'});
@@ -363,9 +379,9 @@ function renderLogin(){
     e.preventDefault();
     const rut = card.querySelector('#loginRut').value.trim();
     if(!rut){ return; }
-    btnT.disabled = true; btnT.textContent='Ingresando…';
+    setBotonCargando(btnT, true, 'Ingresar', 'Ingresando…');
     const res = await callApi({action:'loginTrabajador', rut});
-    btnT.disabled = false; btnT.textContent='Ingresar';
+    setBotonCargando(btnT, false, 'Ingresar', 'Ingresando…');
     // Antes de comprometer el estado global, se valida que la respuesta
     // tenga la forma esperada: una respuesta incompleta o corrupta (posible
     // bajo carga, o si el fallback JSONP entrega algo raro) no debe dejar
@@ -386,9 +402,9 @@ function renderLogin(){
   formA.onsubmit = async (e)=>{
     e.preventDefault();
     const pass = card.querySelector('#loginPass').value;
-    btnA.disabled = true; btnA.textContent='Ingresando…';
+    setBotonCargando(btnA, true, 'Ingresar como admin', 'Ingresando…');
     const res = await callApi({action:'loginAdmin', password:pass});
-    btnA.disabled=false; btnA.textContent='Ingresar como admin';
+    setBotonCargando(btnA, false, 'Ingresar como admin', 'Ingresando…');
     if(!res || !res.ok || !res.config){
       msgBox.innerHTML=''; msgBox.appendChild(el('div',{class:'msg err'}, (res&&res.error)||'Clave incorrecta o respuesta inválida del servidor. Intenta de nuevo.'));
       return;
