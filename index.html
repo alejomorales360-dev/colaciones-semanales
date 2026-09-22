@@ -183,7 +183,8 @@ const state = {
   abiertoCierre: false,     // acordeón "Cierre de inscripciones" abierto
   abiertoCatalogo: false,   // acordeón "Catálogo de platos" abierto
   periodoDesde: iso(addDays(mondayOf(new Date()), -21)),
-  periodoHasta: iso(addDays(mondayOf(new Date()), 4))
+  periodoHasta: iso(addDays(mondayOf(new Date()), 4)),
+  diasGuardandoPedido: new Set() // claves "semana|dia" con un guardado optimista en curso (ver renderTrabajadorBody)
 };
 
 // ---------- fechas ----------
@@ -520,61 +521,83 @@ function renderTrabajadorBody(wrap){
     const opciones = menusSemana.filter(m=>m.dia===dia);
     const especial = esDiaEspecial(opciones);
     const card = el('div',{class:'day-card'+(especial?' especial':'')});
+    const claveDia = semana+'|'+dia;
     const h3 = el('h3',{}, `${dia} · ${fechaDia(state.semanaRef,dia).split('-').reverse().join('-')}`);
+    if(state.diasGuardandoPedido.has(claveDia)){
+      h3.appendChild(el('span',{class:'spinner',style:'border-color:rgba(0,0,0,.15);border-top-color:var(--blue);margin-left:8px'}));
+    }
     card.appendChild(h3);
     if(especial){
       const descEsp = descripcionEspecialDia(opciones);
       card.appendChild(el('div',{class:'pill especial',style:'display:block;width:fit-content;margin-bottom:10px'}, descEsp ? `🌟 Mejorado: ${descEsp}` : '🌟 Almuerzo mejorado'));
     }
     const actual = misPedidos.find(p=>p.dia===dia);
+    // "guardando" bloquea este día mientras haya un guardado optimista en
+    // curso. Se guarda en state (no en el DOM) porque la actualización
+    // optimista vuelve a dibujar todo el día con nodos nuevos apenas se
+    // hace clic: un dataset en el nodo viejo no serviría para bloquear el
+    // nodo nuevo que el usuario ve y podría tocar de nuevo.
+    const guardando = state.diasGuardandoPedido.has(claveDia);
     opciones.forEach(o=>{
       const isSel = actual && String(actual.opcion)===String(o.opcion);
-      const optEl = el('label',{class:'opt'+(isSel?' sel':'')+(cerrado?' locked':''), title: (isSel && !cerrado) ? 'Toca de nuevo para quitar tu elección' : ''});
+      const bloqueadoDia = cerrado || guardando;
+      const optEl = el('label',{class:'opt'+(isSel?' sel':'')+(bloqueadoDia?' locked':''), title: (isSel && !bloqueadoDia) ? 'Toca de nuevo para quitar tu elección' : ''});
       const radio = el('input',{type:'radio', name:'dia_'+dia});
       radio.checked = isSel;
-      radio.disabled = cerrado;
+      radio.disabled = bloqueadoDia;
       optEl.appendChild(radio);
       const txt = el('div',{class:'txt'});
       txt.appendChild(el('span',{class:'code'}, o.opcion+':'));
       txt.appendChild(document.createTextNode(o.descripcion||''));
       optEl.appendChild(txt);
-      if(isSel && !cerrado) optEl.appendChild(el('span',{style:'font-size:11.5px;font-weight:700;color:var(--red);white-space:nowrap'},'✕ Quitar'));
+      if(isSel && !bloqueadoDia) optEl.appendChild(el('span',{style:'font-size:11.5px;font-weight:700;color:var(--red);white-space:nowrap'},'✕ Quitar'));
       optEl.onclick = async (e)=>{
         e.preventDefault();
-        if(cerrado) return;
         // Evita que un doble toque (frecuente en mobile con conexión lenta)
         // dispare dos peticiones a la vez para el mismo día: sin esto, ambas
         // podían calcular el mismo índice "no existe todavía" y terminar
         // agregando dos pedidos duplicados en el estado local.
-        if(card.dataset.busy==='1') return;
-        card.dataset.busy = '1';
-        if(isSel && !confirm(`¿Quitar tu elección (${o.opcion}) de ${dia}?`)){ card.dataset.busy=''; return; }
-        optEl.style.opacity=.6;
+        if(cerrado || state.diasGuardandoPedido.has(claveDia)) return;
+        if(isSel && !confirm(`¿Quitar tu elección (${o.opcion}) de ${dia}?`)) return;
+
+        const rn = normRut(state.trabajador.rut);
+        const idx = state.data.pedidos.findIndex(p=>p.semana===semana && p.dia===dia && normRut(p.rut)===rn);
+        const filaAnterior = idx>=0 ? state.data.pedidos[idx] : null;
+        // Actualización optimista: se muestra el cambio al instante (Apps
+        // Script puede tardar 1-3+ segundos en responder, sobre todo con
+        // varias personas anotándose a la vez) y se revierte solo si el
+        // servidor termina rechazando el guardado.
+        if(isSel){
+          if(idx>=0) state.data.pedidos.splice(idx,1);
+        } else {
+          const nuevo = {semana, rut:state.trabajador.rut, nombre:state.trabajador.nombre, dia, opcion:o.opcion, timestamp:new Date().toISOString()};
+          if(idx>=0) state.data.pedidos[idx]=nuevo; else state.data.pedidos.push(nuevo);
+        }
+        state.diasGuardandoPedido.add(claveDia);
+        renderTrabajadorBody(wrap);
+
         try{
-          const idx = state.data.pedidos.findIndex(p=>p.semana===semana && p.dia===dia && normRut(p.rut)===normRut(state.trabajador.rut));
-          if(isSel){
-            // Tocar la opción ya elegida la desmarca (queda sin elegir ese día).
-            const res = await callApi({action:'eliminarPedido', semana, rut:state.trabajador.rut, dia});
-            if(res && res.ok){
-              if(idx>=0) state.data.pedidos.splice(idx,1);
-              state.msg = {type:'ok', text:`Quitaste tu elección de ${dia}.`};
-            } else {
-              state.msg = {type:'err', text: (res&&res.error)||'No se pudo quitar tu elección.'};
-            }
+          const res = isSel
+            ? await callApi({action:'eliminarPedido', semana, rut:state.trabajador.rut, dia})
+            : await callApi({action:'guardarPedido', data:{semana, rut: state.trabajador.rut, nombre: state.trabajador.nombre, dia, opcion:o.opcion}});
+          if(res && res.ok){
+            state.msg = isSel
+              ? {type:'ok', text:`Quitaste tu elección de ${dia}.`}
+              : {type:'ok', text:`Elegiste la opción ${o.opcion} para ${dia}.`};
           } else {
-            const res = await callApi({action:'guardarPedido', data:{
-              semana, rut: state.trabajador.rut, nombre: state.trabajador.nombre, dia, opcion:o.opcion
-            }});
-            if(res && res.ok){
-              const nuevo = {semana, rut:state.trabajador.rut, nombre:state.trabajador.nombre, dia, opcion:o.opcion, timestamp:new Date().toISOString()};
-              if(idx>=0) state.data.pedidos[idx]=nuevo; else state.data.pedidos.push(nuevo);
-              state.msg = {type:'ok', text:`Elegiste la opción ${o.opcion} para ${dia}.`};
-            } else {
-              state.msg = {type:'err', text: (res&&res.error)||'No se pudo guardar tu elección.'};
+            // El servidor no confirmó: se revierte puntualmente esta fila
+            // (nunca todo el arreglo) para no pisar otros pedidos que hayan
+            // cambiado mientras tanto en otros días.
+            const idxAhora = state.data.pedidos.findIndex(p=>p.semana===semana && p.dia===dia && normRut(p.rut)===rn);
+            if(isSel){
+              if(filaAnterior) state.data.pedidos.push(filaAnterior);
+            } else if(idxAhora>=0){
+              if(filaAnterior) state.data.pedidos[idxAhora]=filaAnterior; else state.data.pedidos.splice(idxAhora,1);
             }
+            state.msg = {type:'err', text: (res&&res.error)||(isSel?'No se pudo quitar tu elección.':'No se pudo guardar tu elección.')};
           }
         } finally {
-          card.dataset.busy = '';
+          state.diasGuardandoPedido.delete(claveDia);
           renderTrabajadorBody(wrap);
         }
       };
