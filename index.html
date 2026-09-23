@@ -184,7 +184,8 @@ const state = {
   abiertoCatalogo: false,   // acordeón "Catálogo de platos" abierto
   periodoDesde: iso(addDays(mondayOf(new Date()), -21)),
   periodoHasta: iso(addDays(mondayOf(new Date()), 4)),
-  diasGuardandoPedido: new Set() // claves "semana|dia" con un guardado optimista en curso (ver renderTrabajadorBody)
+  diasGuardandoPedido: new Set(), // claves "semana|dia" con un guardado optimista en curso (ver renderTrabajadorBody)
+  semanasTocadas: new Set() // semanas donde el trabajador ya tocó al menos una opción en esta sesión (ver aviso de día sin elegir)
 };
 
 // ---------- fechas ----------
@@ -473,7 +474,7 @@ function renderTrabajador(){
   const root = el('div',{});
   const nombre = state.trabajador.nombre;
   const primerNombre = primerNombreDe(nombre);
-  root.appendChild(topHeader(primerNombre?`Hola, ${primerNombre}`:'🍽️ Colaciones', nombre, ()=>{ state.role=null; state.trabajador=null; render(); }, null, {avatar:inicialesDe(nombre), salirRojo:true}));
+  root.appendChild(topHeader(primerNombre?`Hola, ${primerNombre}`:'🍽️ Colaciones', nombre, ()=>{ avisarSiFaltaDia(iso(state.semanaRef)); state.role=null; state.trabajador=null; render(); }, null, {avatar:inicialesDe(nombre), salirRojo:true}));
   const wrap = el('div',{class:'wrap'});
 
   wrap.appendChild(weekNav(()=>renderTrabajadorBody(wrap)));
@@ -486,8 +487,8 @@ function weekNav(onChange){
   const prev = el('button',{class:'btn sm'},'‹');
   const lbl = el('div',{class:'lbl'}, fmtSemana(state.semanaRef));
   const next = el('button',{class:'btn sm'},'›');
-  prev.onclick = ()=>{ state.semanaRef = addDays(state.semanaRef,-7); lbl.textContent = fmtSemana(state.semanaRef); onChange(); };
-  next.onclick = ()=>{ state.semanaRef = addDays(state.semanaRef, 7); lbl.textContent = fmtSemana(state.semanaRef); onChange(); };
+  prev.onclick = ()=>{ avisarSiFaltaDia(iso(state.semanaRef)); state.semanaRef = addDays(state.semanaRef,-7); lbl.textContent = fmtSemana(state.semanaRef); onChange(); };
+  next.onclick = ()=>{ avisarSiFaltaDia(iso(state.semanaRef)); state.semanaRef = addDays(state.semanaRef, 7); lbl.textContent = fmtSemana(state.semanaRef); onChange(); };
   nav.append(prev,lbl,next);
   return nav;
 }
@@ -574,6 +575,7 @@ function renderTrabajadorBody(wrap){
           if(idx>=0) state.data.pedidos[idx]=nuevo; else state.data.pedidos.push(nuevo);
         }
         state.diasGuardandoPedido.add(claveDia);
+        state.semanasTocadas.add(semana);
         renderTrabajadorBody(wrap);
 
         try{
@@ -666,6 +668,24 @@ function semanaEstaPublicada(semanaIso){
 }
 function diaEsFeriado(semanaIso, dia){
   return (state.data.feriados||[]).some(f=>String(f.semana).trim()===semanaIso && String(f.dia).trim()===dia);
+}
+// Días de esa semana con menú (no feriados) que el trabajador todavía no
+// eligió. Se usa para el aviso al cambiar de semana o salir — ver weekNav()
+// y renderTrabajador().
+function diasSinElegirTrabajador(semanaIso){
+  const menusSemana = state.data.menus.filter(m=>String(m.semana).trim()===semanaIso && String(m.activo).toLowerCase()!=='no');
+  const misPedidos = state.data.pedidos.filter(p=>String(p.semana).trim()===semanaIso);
+  const diasConMenu = DIAS.filter(d=>menusSemana.some(m=>m.dia===d) && !diaEsFeriado(semanaIso,d));
+  return diasConMenu.filter(d=>!misPedidos.some(p=>p.dia===d));
+}
+// Muestra el aviso de "te falta un día" solo si el trabajador ya tocó
+// alguna opción de esa semana en esta sesión (nunca por solo mirarla) y
+// todavía queda al menos un día sin elegir.
+function avisarSiFaltaDia(semanaIso){
+  if(!state.semanasTocadas.has(semanaIso)) return;
+  const faltantes = diasSinElegirTrabajador(semanaIso);
+  if(!faltantes.length) return;
+  alert(`⚠️ Ojo: todavía no elegiste almuerzo para ${faltantes.join(', ')} de la semana del ${fmtSemana(new Date(semanaIso+'T00:00:00'))}.`);
 }
 function descripcionEspecialDia(opciones){
   const o = opciones.find(o=>String(o.especial||'').toLowerCase()==='si' && o.descripcionespecial);
