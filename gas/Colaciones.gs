@@ -185,19 +185,26 @@ function cacheColLeer_(clave, ttlSeg, fn, esValido) {
 function cacheColInvalidar_(clave) {
   try { CacheService.getScriptCache().remove(clave); } catch (err) { /* nada que invalidar */ }
 }
-function trabajadoresCacheadosCol() { return cacheColLeer_('trabajadores', 20, () => hojaAObjetosCol(HOJAS_COL.TRABAJADORES)); }
-function menusCacheadosCol() { return cacheColLeer_('menus', 15, menusAObjetosCol); }
-function platosCacheadosCol() { return cacheColLeer_('platos', 30, listarPlatosCol); }
-function configCacheadoCol() { return cacheColLeer_('config', 20, obtenerConfigCol, v => v && Object.keys(v).length > 0); }
+// TTLs subidos (Trabajadores/Menus/Config 20-30s -> 60s): todas estas cachés
+// se invalidan al toque en cuanto se escribe el dato correspondiente, asi
+// que un TTL mas largo no puede mostrar algo desactualizado tras un cambio
+// — solo evita que, durante una entrada masiva (varios workers iniciando
+// sesion casi juntos), cada peticion dispare su propia lectura completa de
+// la hoja en vez de reusar la misma cache. Esto es lo que mas pesa en la
+// lentitud real observada en "Ejecuciones" (varias hojas leidas por login).
+function trabajadoresCacheadosCol() { return cacheColLeer_('trabajadores', 60, () => hojaAObjetosCol(HOJAS_COL.TRABAJADORES)); }
+function menusCacheadosCol() { return cacheColLeer_('menus', 60, menusAObjetosCol); }
+function platosCacheadosCol() { return cacheColLeer_('platos', 60, listarPlatosCol); }
+function configCacheadoCol() { return cacheColLeer_('config', 60, obtenerConfigCol, v => v && Object.keys(v).length > 0); }
 // TTL subido de 5s a 20s: como cacheColInvalidar_('pedidos') se llama justo
 // despues de CADA guardarPedido/eliminarPedido, un TTL mas largo no arriesga
 // mostrar un pedido desactualizado tras escribir (se invalida al toque) —
 // solo evita que, con muchas personas leyendo a la vez (por ejemplo varios
 // que inician sesion casi al mismo tiempo), cada una dispare su propia
 // lectura completa de la hoja Pedidos en vez de reusar la misma cache.
-function pedidosCacheadosCol() { return cacheColLeer_('pedidos', 20, () => hojaAObjetosCol(HOJAS_COL.PEDIDOS)); }
+function pedidosCacheadosCol() { return cacheColLeer_('pedidos', 60, () => hojaAObjetosCol(HOJAS_COL.PEDIDOS)); }
 function feriadosCacheadosCol() {
-  return cacheColLeer_('feriados', 20, () => {
+  return cacheColLeer_('feriados', 60, () => {
     try { return hojaAObjetosCol(HOJAS_COL.FERIADOS); } catch (err) { return []; }
   });
 }
@@ -606,7 +613,7 @@ function eliminarMenuCol(semana, dia, opcion) {
 }
 // --- SEMANAS (borrador / publicada) ---
 function semanasCacheadasCol() {
-  return cacheColLeer_('semanas', 20, () => {
+  return cacheColLeer_('semanas', 60, () => {
     try { return hojaAObjetosCol(HOJAS_COL.SEMANAS); } catch (err) { return []; }
   });
 }
