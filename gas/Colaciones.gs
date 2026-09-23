@@ -221,8 +221,19 @@ function conCandadoCol_(fn) {
 }
 
 // --- HELPERS ---
+// Cachea la planilla activa durante esta ejecucion: una peticion tipica
+// (ej. obtenerTodoCol) toca hasta 7 hojas distintas, y cada llamada a
+// SpreadsheetApp.getActiveSpreadsheet() tiene su propio costo. Sin esto se
+// pagaba ese costo una vez por hoja en vez de una sola vez por peticion,
+// lo que se sumaba a la lentitud real observada en "Ejecuciones" (varios
+// doGet/doPost de 5-12 segundos).
+var _ssActivaCol = null;
+function ssActivaCol_() {
+  if (!_ssActivaCol) _ssActivaCol = SpreadsheetApp.getActiveSpreadsheet();
+  return _ssActivaCol;
+}
 function getHojaCol(nombre) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = ssActivaCol_();
   let h = ss.getSheetByName(nombre);
   if (!h) {
     const nombreLower = String(nombre).toLowerCase();
@@ -618,7 +629,7 @@ function semanaPublicadaCol(semana) {
 // corrio la migracion agregarHojaSemanas): asi publicar/despublicar nunca
 // falla por un paso de configuracion olvidado.
 function getOCrearHojaSemanasCol_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = ssActivaCol_();
   let h = ss.getSheetByName(HOJAS_COL.SEMANAS);
   if (!h) {
     h = ss.insertSheet(HOJAS_COL.SEMANAS);
@@ -655,7 +666,7 @@ function marcarSemanaPublicadaCol(semana, publicada) {
 // una opcion de menu para ese dia: el admin puede marcarlo apenas sepa que
 // no se trabaja, incluso antes de armar el menu de esa semana.
 function getOCrearHojaFeriadosCol_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = ssActivaCol_();
   let h = ss.getSheetByName(HOJAS_COL.FERIADOS);
   if (!h) {
     h = ss.insertSheet(HOJAS_COL.FERIADOS);
@@ -782,7 +793,7 @@ function loginTrabajadorCol(rutIngresado) {
 
 // --- UTILIDADES DE DIAGNOSTICO (ejecutar manualmente desde el editor) ---
 function listarHojasCol() {
-  const nombres = SpreadsheetApp.getActiveSpreadsheet().getSheets().map(s => s.getName());
+  const nombres = ssActivaCol_().getSheets().map(s => s.getName());
   Logger.log('Hojas encontradas: ' + JSON.stringify(nombres));
   return nombres;
 }
@@ -791,7 +802,7 @@ function testAPICol() {
   Logger.log('Trabajadores:' + d.trabajadores.length + ' Menus:' + d.menus.length + ' Pedidos:' + d.pedidos.length);
 }
 function crearHojasIniciales() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = ssActivaCol_();
   const specs = {
     Trabajadores: ['RUT', 'Nombre', 'Tipo', 'Activo', 'FechaInicio', 'FechaFin', 'Notas'],
     Menus: ['Semana', 'Dia', 'Opcion', 'Descripcion', 'Activo', 'Especial', 'DescripcionEspecial'],
@@ -863,7 +874,7 @@ function repararCierreHora() {
 // Crea la hoja "Platos" si falta y la precarga con todas las descripciones
 // ya usadas en "Menus", para no perder lo que ya tenias escrito.
 function agregarHojaPlatos() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = ssActivaCol_();
   let h = ss.getSheetByName(HOJAS_COL.PLATOS);
   if (!h) h = ss.insertSheet(HOJAS_COL.PLATOS);
   if (h.getLastRow() === 0) h.appendRow(['Nombre']);
@@ -883,7 +894,7 @@ function agregarHojaPlatos() {
 // publicadas (Si) todas las semanas que ya tengan menu armado, para que
 // nadie pierda de vista un menu que los trabajadores ya podian ver.
 function agregarHojaSemanas() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = ssActivaCol_();
   let h = ss.getSheetByName(HOJAS_COL.SEMANAS);
   if (!h) h = ss.insertSheet(HOJAS_COL.SEMANAS);
   if (h.getLastRow() === 0) h.appendRow(['Semana', 'Publicada']);
