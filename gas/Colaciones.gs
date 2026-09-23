@@ -189,7 +189,13 @@ function trabajadoresCacheadosCol() { return cacheColLeer_('trabajadores', 20, (
 function menusCacheadosCol() { return cacheColLeer_('menus', 15, menusAObjetosCol); }
 function platosCacheadosCol() { return cacheColLeer_('platos', 30, listarPlatosCol); }
 function configCacheadoCol() { return cacheColLeer_('config', 20, obtenerConfigCol, v => v && Object.keys(v).length > 0); }
-function pedidosCacheadosCol() { return cacheColLeer_('pedidos', 5, () => hojaAObjetosCol(HOJAS_COL.PEDIDOS)); }
+// TTL subido de 5s a 20s: como cacheColInvalidar_('pedidos') se llama justo
+// despues de CADA guardarPedido/eliminarPedido, un TTL mas largo no arriesga
+// mostrar un pedido desactualizado tras escribir (se invalida al toque) —
+// solo evita que, con muchas personas leyendo a la vez (por ejemplo varios
+// que inician sesion casi al mismo tiempo), cada una dispare su propia
+// lectura completa de la hoja Pedidos en vez de reusar la misma cache.
+function pedidosCacheadosCol() { return cacheColLeer_('pedidos', 20, () => hojaAObjetosCol(HOJAS_COL.PEDIDOS)); }
 function feriadosCacheadosCol() {
   return cacheColLeer_('feriados', 20, () => {
     try { return hojaAObjetosCol(HOJAS_COL.FERIADOS); } catch (err) { return []; }
