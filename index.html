@@ -340,18 +340,17 @@ function callApi(body){
   // ACCIONES_ADMIN en Colaciones.gs): sin ella, cualquiera que descubra la
   // URL /exec podría editar datos sin haber iniciado sesión como admin.
   if(state.role==='admin' && state.adminPassword) body = {...body, adminPassword: state.adminPassword};
-  // Las ejecuciones reales de Apps Script (ver "Ejecuciones" en el editor)
-  // muestran que responder tarda normalmente 2-12 segundos, no por una
-  // conexión colgada sino porque así de lento es Apps Script bajo uso
-  // real. Un timeout más corto que eso (probado antes: 6s) no "arregla"
-  // nada — corta a la mitad peticiones que sí iban a funcionar y las hace
-  // fallar con "Tiempo de espera agotado". Por eso el margen es generoso:
-  // esto solo debe saltar si la conexión realmente no responde.
+  // Con la pestaña Network de Chrome se vio en vivo que Apps Script (no la
+  // red del usuario) tarda normalmente 5-6 segundos por llamada, y a veces
+  // bastante más — se registró una que se demoró más de 18 segundos.
+  // Es un arranque lento del propio Apps Script (más notorio tras un rato
+  // sin uso), no una conexión colgada. Por eso el margen es amplio: que
+  // esto salte solo si de verdad no hay respuesta, no por impaciencia.
   return fetchConTimeout(GAS_URL, {
     method:'POST',
     headers:{'Content-Type':'text/plain;charset=utf-8'},
     body: JSON.stringify(body)
-  }, 18000).then(r=>r.json()).catch(()=> jsonp(body));
+  }, 25000).then(r=>r.json()).catch(()=> jsonp(body));
 }
 function jsonp(body){
   return new Promise((resolve)=>{
@@ -365,7 +364,7 @@ function jsonp(body){
     script.onerror = ()=>{ resolve({ok:false,error:'No se pudo conectar al servidor.'}); cleanup(); };
     document.body.appendChild(script);
     function cleanup(){ delete window[cbName]; script.remove(); }
-    setTimeout(()=>{ if(window[cbName]){ resolve({ok:false,error:'Tiempo de espera agotado.'}); cleanup(); } }, 18000);
+    setTimeout(()=>{ if(window[cbName]){ resolve({ok:false,error:'Tiempo de espera agotado.'}); cleanup(); } }, 25000);
   });
 }
 // Reintenta una vez una llamada de solo lectura (nunca para acciones que
@@ -373,7 +372,7 @@ function jsonp(body){
 // enmascarar una respuesta que en realidad sí llegó a completarse). Un
 // fallo puntual (mala señal, una petición que se cae) suele resolverse solo
 // en el segundo intento sin que el usuario tenga que volver a tocar nada.
-// Si el primer intento ya se demoró el máximo posible (~36s: la conexión
+// Si el primer intento ya se demoró el máximo posible (~50s: la conexión
 // realmente no responde, no fue un tropiezo puntual), no vale la pena
 // reintentar — solo duplicaría la espera sin cambiar el resultado.
 async function callApiConReintento(body){
@@ -539,7 +538,7 @@ function topHeader(title, who, onExit, onRefrescar, opts){
 // Vuelve a traer trabajadores/menus/pedidos/platos/config sin cerrar
 // sesión (para el botón 🔄 Actualizar del panel de admin).
 function fetchTodoAdmin(){
-  return fetchConTimeout(GAS_URL, {}, 18000).then(r=>r.json()).catch(()=> jsonp());
+  return fetchConTimeout(GAS_URL, {}, 25000).then(r=>r.json()).catch(()=> jsonp());
 }
 
 // ============================================================
