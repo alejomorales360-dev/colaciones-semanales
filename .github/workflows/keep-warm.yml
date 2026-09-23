@@ -1,0 +1,30 @@
+name: Mantener Apps Script activo
+
+on:
+  schedule:
+    # Cada 10 minutos, de lunes a viernes, 07:00-16:00 hora de Chile (UTC-3/UTC-4
+    # según horario de verano; se usa 10:00-19:00 UTC como cobertura amplia).
+    - cron: '*/10 10-19 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Visitar Apps Script para evitar el arranque en frío
+        run: |
+          GAS_URL=$(grep -oE "const GAS_URL = '[^']*'" index.html | sed "s/const GAS_URL = '//;s/'//")
+          if [ -z "$GAS_URL" ] || [[ "$GAS_URL" == *PEGA_AQUI* ]]; then
+            echo "GAS_URL no configurada todavía en index.html, se omite el ping."
+            exit 0
+          fi
+          echo "Haciendo ping a $GAS_URL"
+          # Es una petición GET simple (sin "action"), que en el backend solo
+          # lee datos (obtenerTodoCol) y no modifica nada. -f hace que el
+          # comando falle si Google responde con error, pero sin cortar el
+          # workflow (el "|| true" evita que un fallo puntual se marque como
+          # rojo en Actions, ya que igual se reintenta en 10 minutos).
+          curl -sS -m 30 -o /dev/null -w "HTTP %{http_code} en %{time_total}s\n" "$GAS_URL" || true
