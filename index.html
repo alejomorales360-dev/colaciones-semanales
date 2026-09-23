@@ -340,11 +340,14 @@ function callApi(body){
   // ACCIONES_ADMIN en Colaciones.gs): sin ella, cualquiera que descubra la
   // URL /exec podría editar datos sin haber iniciado sesión como admin.
   if(state.role==='admin' && state.adminPassword) body = {...body, adminPassword: state.adminPassword};
+  // 6s+8s (14s peor caso) en vez de 9s+15s (24s): con 60 personas
+  // conectándose casi a la vez, esperar 24 segundos completos antes de
+  // avisar que algo falló se sentía como que la app estaba "pegada".
   return fetchConTimeout(GAS_URL, {
     method:'POST',
     headers:{'Content-Type':'text/plain;charset=utf-8'},
     body: JSON.stringify(body)
-  }, 9000).then(r=>r.json()).catch(()=> jsonp(body));
+  }, 6000).then(r=>r.json()).catch(()=> jsonp(body));
 }
 function jsonp(body){
   return new Promise((resolve)=>{
@@ -358,8 +361,23 @@ function jsonp(body){
     script.onerror = ()=>{ resolve({ok:false,error:'No se pudo conectar al servidor.'}); cleanup(); };
     document.body.appendChild(script);
     function cleanup(){ delete window[cbName]; script.remove(); }
-    setTimeout(()=>{ if(window[cbName]){ resolve({ok:false,error:'Tiempo de espera agotado.'}); cleanup(); } }, 15000);
+    setTimeout(()=>{ if(window[cbName]){ resolve({ok:false,error:'Tiempo de espera agotado.'}); cleanup(); } }, 8000);
   });
+}
+// Reintenta una vez una llamada de solo lectura (nunca para acciones que
+// modifican datos: reintentar guardarPedido/eliminarPedido a ciegas podría
+// enmascarar una respuesta que en realidad sí llegó a completarse). Un
+// fallo puntual (mala señal, una petición que se cae) suele resolverse solo
+// en el segundo intento sin que el usuario tenga que volver a tocar nada.
+// Si el primer intento ya se demoró el máximo posible (~14s: la conexión
+// realmente no responde, no fue un tropiezo puntual), no vale la pena
+// reintentar — solo duplicaría la espera sin cambiar el resultado.
+async function callApiConReintento(body){
+  const inicio = Date.now();
+  const primero = await callApi(body);
+  if(primero && primero.ok) return primero;
+  if(Date.now() - inicio > 10000) return primero;
+  return callApi(body);
 }
 
 // ---------- render root ----------
@@ -448,7 +466,7 @@ function renderLogin(){
     const rut = card.querySelector('#loginRut').value.trim();
     if(!rut){ return; }
     setBotonCargando(btnT, true, 'Ingresar', 'Ingresando…');
-    const res = await callApi({action:'loginTrabajador', rut});
+    const res = await callApiConReintento({action:'loginTrabajador', rut});
     setBotonCargando(btnT, false, 'Ingresar', 'Ingresando…');
     // Antes de comprometer el estado global, se valida que la respuesta
     // tenga la forma esperada: una respuesta incompleta o corrupta (posible
@@ -471,7 +489,7 @@ function renderLogin(){
     e.preventDefault();
     const pass = card.querySelector('#loginPass').value;
     setBotonCargando(btnA, true, 'Ingresar como admin', 'Ingresando…');
-    const res = await callApi({action:'loginAdmin', password:pass});
+    const res = await callApiConReintento({action:'loginAdmin', password:pass});
     setBotonCargando(btnA, false, 'Ingresar como admin', 'Ingresando…');
     if(!res || !res.ok || !res.config){
       msgBox.innerHTML=''; msgBox.appendChild(el('div',{class:'msg err'}, (res&&res.error)||'Clave incorrecta o respuesta inválida del servidor. Intenta de nuevo.'));
@@ -517,7 +535,7 @@ function topHeader(title, who, onExit, onRefrescar, opts){
 // Vuelve a traer trabajadores/menus/pedidos/platos/config sin cerrar
 // sesión (para el botón 🔄 Actualizar del panel de admin).
 function fetchTodoAdmin(){
-  return fetchConTimeout(GAS_URL, {}, 9000).then(r=>r.json()).catch(()=> jsonp());
+  return fetchConTimeout(GAS_URL, {}, 6000).then(r=>r.json()).catch(()=> jsonp());
 }
 
 // ============================================================
