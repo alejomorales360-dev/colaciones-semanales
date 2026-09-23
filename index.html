@@ -95,6 +95,25 @@ tr:hover td{background:var(--bg2)}
 .modal-fullscreen .hdr-modal{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--bd)}
 .modal-fullscreen .hdr-modal h2{font-size:16px;text-transform:none;letter-spacing:0;color:var(--blue);margin-bottom:0}
 .modal-fullscreen-body{max-width:520px;margin:0 auto}
+/* Diálogos propios (reemplazan alert()/confirm() del navegador): no muestran
+   la URL del sitio y tienen colores e íconos según el tipo de aviso. */
+.dlg-overlay{position:fixed;inset:0;z-index:500;background:rgba(15,20,30,.55);display:flex;align-items:center;justify-content:center;padding:20px;animation:dlgFade .15s ease-out}
+@keyframes dlgFade{from{opacity:0}to{opacity:1}}
+.dlg-box{width:100%;max-width:380px;background:var(--bg);border-radius:18px;padding:22px 22px 18px;box-shadow:0 20px 50px rgba(0,0,0,.3);text-align:center;animation:dlgPop .18s cubic-bezier(.34,1.56,.64,1)}
+@keyframes dlgPop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
+.dlg-icon{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 14px}
+.dlg-warn .dlg-icon{background:linear-gradient(135deg,#FFD98E,var(--amber))}
+.dlg-danger .dlg-icon{background:linear-gradient(135deg,#FF9B9B,var(--red))}
+.dlg-ok .dlg-icon{background:linear-gradient(135deg,#8CEFC7,var(--green))}
+.dlg-info .dlg-icon{background:linear-gradient(135deg,#8FC2FF,var(--blue))}
+.dlg-title{font-size:17px;font-weight:800;margin-bottom:8px;color:var(--t1)}
+.dlg-text{font-size:14px;color:var(--t2);line-height:1.5;margin-bottom:18px;white-space:pre-line}
+.dlg-actions{display:flex;flex-direction:column;gap:8px}
+.dlg-btn{width:100%;border-radius:11px;padding:13px;font-size:14.5px;font-weight:700;border:1px solid var(--bd2);background:var(--bg2);color:var(--t1)}
+.dlg-warn .dlg-btn.primary{background:linear-gradient(135deg,#FFB238,var(--amber));border-color:var(--amber);color:#fff}
+.dlg-danger .dlg-btn.primary{background:linear-gradient(135deg,#FF6B6B,var(--red));border-color:var(--red);color:#fff}
+.dlg-ok .dlg-btn.primary{background:linear-gradient(135deg,#34D399,var(--green));border-color:var(--green);color:#fff}
+.dlg-info .dlg-btn.primary{background:linear-gradient(135deg,#4F9CFF,var(--blue));border-color:var(--blue);color:#fff}
 .center{background:linear-gradient(160deg,var(--bl2) 0%,var(--bg3) 45%)}
 .login-card{background:var(--bg);border-radius:20px;box-shadow:0 10px 40px rgba(20,40,90,.14);padding:30px 26px;max-width:400px;width:100%;border:1px solid var(--bd)}
 .login-icon{width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,var(--blue),var(--bl3));display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 14px;box-shadow:0 6px 16px rgba(21,101,216,.35)}
@@ -252,6 +271,53 @@ function fmtCierre(d){
   const hh = String(d.getHours()).padStart(2,'0');
   const mm = String(d.getMinutes()).padStart(2,'0');
   return `${d.toLocaleDateString('es-CL',opt)}, ${hh}:${mm} hrs`;
+}
+
+// ---------- Diálogos propios (reemplazan alert()/confirm()) ----------
+// El alert()/confirm() nativos del navegador muestran la URL del sitio y no
+// se pueden personalizar ni maquetar con dos botones a gusto. Estas
+// funciones dibujan una ventana propia (mismos colores de la app) y
+// devuelven una Promise, para poder usarlas con await igual que antes.
+function mostrarDialogo({tipo='info', titulo, texto, botones}){
+  return new Promise(resolve=>{
+    const ICONOS = {info:'ℹ️', warn:'⚠️', danger:'🗑️', ok:'✅'};
+    const overlay = el('div',{class:'dlg-overlay'});
+    const box = el('div',{class:'dlg-box dlg-'+tipo});
+    box.appendChild(el('div',{class:'dlg-icon'}, ICONOS[tipo]||ICONOS.info));
+    box.appendChild(el('h3',{class:'dlg-title'}, titulo));
+    box.appendChild(el('p',{class:'dlg-text'}, texto));
+    const row = el('div',{class:'dlg-actions'});
+    let resuelto = false;
+    const cerrar = (valor)=>{
+      if(resuelto) return;
+      resuelto = true;
+      overlay.remove();
+      resolve(valor);
+    };
+    botones.forEach(b=>{
+      const btn = el('button',{class:'dlg-btn'+(b.primary?' primary':'')}, b.label);
+      btn.onclick = ()=>cerrar(b.value);
+      row.appendChild(btn);
+    });
+    box.appendChild(row);
+    overlay.appendChild(box);
+    // Tocar fuera del cuadro equivale a la opción "segura" (la primera de
+    // la lista, normalmente cancelar/quedarse), nunca a la acción principal.
+    overlay.onclick = (e)=>{ if(e.target===overlay) cerrar(botones[0].value); };
+    document.body.appendChild(overlay);
+  });
+}
+// Reemplazo de alert(): un solo botón. tipo: 'info' | 'warn' | 'danger' | 'ok'.
+function avisar(texto, tipo='info', titulo){
+  const TITULOS = {info:'Aviso', warn:'Atención', danger:'Ocurrió un problema', ok:'Listo'};
+  return mostrarDialogo({tipo, titulo: titulo||TITULOS[tipo], texto, botones:[{label:'Entendido', value:true, primary:true}]});
+}
+// Reemplazo de confirm(): dos botones, devuelve true/false.
+function preguntar(texto, {titulo='¿Confirmas?', tipo='warn', labelSi='Sí, continuar', labelNo='Cancelar'}={}){
+  return mostrarDialogo({tipo, titulo, texto, botones:[
+    {label:labelNo, value:false},
+    {label:labelSi, value:true, primary:true}
+  ]});
 }
 
 // ---------- API ----------
@@ -474,7 +540,10 @@ function renderTrabajador(){
   const root = el('div',{});
   const nombre = state.trabajador.nombre;
   const primerNombre = primerNombreDe(nombre);
-  root.appendChild(topHeader(primerNombre?`Hola, ${primerNombre}`:'🍽️ Colaciones', nombre, ()=>{ avisarSiFaltaDia(iso(state.semanaRef)); state.role=null; state.trabajador=null; render(); }, null, {avatar:inicialesDe(nombre), salirRojo:true}));
+  root.appendChild(topHeader(primerNombre?`Hola, ${primerNombre}`:'🍽️ Colaciones', nombre, async ()=>{
+    if(!(await confirmarSiFaltaDia(iso(state.semanaRef), 'Salir igual'))) return;
+    state.role=null; state.trabajador=null; render();
+  }, null, {avatar:inicialesDe(nombre), salirRojo:true}));
   const wrap = el('div',{class:'wrap'});
 
   wrap.appendChild(weekNav(()=>renderTrabajadorBody(wrap)));
@@ -487,8 +556,14 @@ function weekNav(onChange){
   const prev = el('button',{class:'btn sm'},'‹');
   const lbl = el('div',{class:'lbl'}, fmtSemana(state.semanaRef));
   const next = el('button',{class:'btn sm'},'›');
-  prev.onclick = ()=>{ avisarSiFaltaDia(iso(state.semanaRef)); state.semanaRef = addDays(state.semanaRef,-7); lbl.textContent = fmtSemana(state.semanaRef); onChange(); };
-  next.onclick = ()=>{ avisarSiFaltaDia(iso(state.semanaRef)); state.semanaRef = addDays(state.semanaRef, 7); lbl.textContent = fmtSemana(state.semanaRef); onChange(); };
+  prev.onclick = async ()=>{
+    if(!(await confirmarSiFaltaDia(iso(state.semanaRef), 'Cambiar de semana igual'))) return;
+    state.semanaRef = addDays(state.semanaRef,-7); lbl.textContent = fmtSemana(state.semanaRef); onChange();
+  };
+  next.onclick = async ()=>{
+    if(!(await confirmarSiFaltaDia(iso(state.semanaRef), 'Cambiar de semana igual'))) return;
+    state.semanaRef = addDays(state.semanaRef, 7); lbl.textContent = fmtSemana(state.semanaRef); onChange();
+  };
   nav.append(prev,lbl,next);
   return nav;
 }
@@ -559,7 +634,7 @@ function renderTrabajadorBody(wrap){
         // podían calcular el mismo índice "no existe todavía" y terminar
         // agregando dos pedidos duplicados en el estado local.
         if(cerrado || state.diasGuardandoPedido.has(claveDia)) return;
-        if(isSel && !confirm(`¿Quitar tu elección (${o.opcion}) de ${dia}?`)) return;
+        if(isSel && !(await preguntar(`¿Quitar tu elección (${o.opcion}) de ${dia}?`, {titulo:'Quitar elección', labelSi:'Sí, quitar'}))) return;
 
         const rn = normRut(state.trabajador.rut);
         const idx = state.data.pedidos.findIndex(p=>p.semana===semana && p.dia===dia && normRut(p.rut)===rn);
@@ -681,11 +756,17 @@ function diasSinElegirTrabajador(semanaIso){
 // Muestra el aviso de "te falta un día" solo si el trabajador ya tocó
 // alguna opción de esa semana en esta sesión (nunca por solo mirarla) y
 // todavía queda al menos un día sin elegir.
-function avisarSiFaltaDia(semanaIso){
-  if(!state.semanasTocadas.has(semanaIso)) return;
+// Devuelve una Promise<boolean>: true si el trabajador puede continuar
+// (cambiar de semana o salir), false si prefiere quedarse a completar el
+// día que le falta. Da las dos opciones en vez de solo "Aceptar". Solo se
+// pregunta si ya tocó alguna opción de esa semana en esta sesión (mirarla
+// sin marcar nada no interrumpe nada).
+function confirmarSiFaltaDia(semanaIso, labelContinuar){
+  if(!state.semanasTocadas.has(semanaIso)) return Promise.resolve(true);
   const faltantes = diasSinElegirTrabajador(semanaIso);
-  if(!faltantes.length) return;
-  alert(`⚠️ Ojo: todavía no elegiste almuerzo para ${faltantes.join(', ')} de la semana del ${fmtSemana(new Date(semanaIso+'T00:00:00'))}.`);
+  if(!faltantes.length) return Promise.resolve(true);
+  const texto = `Todavía no elegiste almuerzo para ${faltantes.join(', ')} de la semana del ${fmtSemana(new Date(semanaIso+'T00:00:00'))}.`;
+  return preguntar(texto, {titulo:'Te falta un día por elegir', tipo:'warn', labelNo:'Completar ahora', labelSi:labelContinuar||'Continuar igual'});
 }
 function descripcionEspecialDia(opciones){
   const o = opciones.find(o=>String(o.especial||'').toLowerCase()==='si' && o.descripcionespecial);
@@ -706,7 +787,7 @@ function renderAdmin(){
   const root = el('div',{});
   root.appendChild(topHeader('🍽️ Colaciones · Administración', '', ()=>{ state.role=null; state.admin=false; state.adminPassword=null; render(); }, async ()=>{
     const res = await fetchTodoAdmin();
-    if(res.ok){ state.data = res; render(); } else alert(res.error||'No se pudo actualizar.');
+    if(res.ok){ state.data = res; render(); } else await avisar(res.error||'No se pudo actualizar.', 'danger');
   }));
   const wrap = el('div',{class:'wrap'});
 
@@ -809,7 +890,7 @@ function buildCierreConfigBody(card){
     const res = await callApi({action:'guardarConfig', clave:'nombre_sitio', valor:inpSitio.value.trim()});
     btnGuardarSitio.disabled = false;
     if(res.ok){ state.data.config.nombre_sitio = inpSitio.value.trim(); btnGuardarSitio.textContent='✓'; setTimeout(()=>btnGuardarSitio.textContent='Guardar',1000); }
-    else alert(res.error||'Error');
+    else await avisar(res.error||'Error', 'danger');
   };
   rowSitio.append(fSitio, btnGuardarSitio);
   card.appendChild(rowSitio);
@@ -825,11 +906,11 @@ function buildCatalogoPlatosBody(card){
     chip.appendChild(document.createTextNode(p));
     const btnX = el('button',{class:'btn ghost sm',style:'padding:0 4px;min-height:auto;font-weight:800'},'✕');
     btnX.onclick = async ()=>{
-      if(!confirm(`¿Quitar "${p}" del catálogo? (no borra los menús ya armados con este plato)`)) return;
+      if(!(await preguntar(`¿Quitar "${p}" del catálogo? (no borra los menús ya armados con este plato)`, {titulo:'Quitar plato', labelSi:'Sí, quitar'}))) return;
       btnX.disabled = true;
       const res = await callApi({action:'eliminarPlato', nombre:p});
       if(res.ok){ state.data.platos = state.data.platos.filter(x=>x!==p); render(); }
-      else { btnX.disabled=false; alert(res.error||'Error'); }
+      else { btnX.disabled=false; await avisar(res.error||'Error', 'danger'); }
     };
     chip.appendChild(btnX);
     chips.appendChild(chip);
@@ -913,18 +994,18 @@ function renderAdminTrabajadores(){
       const res = await callApi({action:'guardarTrabajador', isEdit:true, data:{
         rut:t.rut, nombre:t.nombre, tipo:t.tipo, activo:nuevoActivo, fechaInicio:t.fechainicio, fechaFin:t.fechafin, notas:t.notas
       }});
-      if(res.ok){ t.activo = nuevoActivo; render(); } else { btnToggle.disabled=false; alert(res.error||'Error'); }
+      if(res.ok){ t.activo = nuevoActivo; render(); } else { btnToggle.disabled=false; await avisar(res.error||'Error', 'danger'); }
     };
     tdToggle.appendChild(btnToggle);
     tr.appendChild(tdToggle);
     const tdDel = el('td',{class:'no-print'});
     const btnDel = el('button',{class:'btn sm danger'},'Eliminar');
     btnDel.onclick = async ()=>{
-      if(!confirm(`¿Eliminar a ${t.nombre}? Esta acción no se puede deshacer.`)) return;
+      if(!(await preguntar(`¿Eliminar a ${t.nombre}? Esta acción no se puede deshacer.`, {titulo:'Eliminar trabajador', tipo:'danger', labelSi:'Sí, eliminar'}))) return;
       btnDel.disabled=true;
       const res = await callApi({action:'eliminarTrabajador', rut:t.rut});
       if(res.ok){ state.data.trabajadores = state.data.trabajadores.filter(x=>normRut(x.rut)!==normRut(t.rut)); render(); }
-      else { btnDel.disabled=false; alert(res.error||'Error'); }
+      else { btnDel.disabled=false; await avisar(res.error||'Error', 'danger'); }
     };
     tdDel.appendChild(btnDel);
     tr.appendChild(tdDel);
@@ -986,10 +1067,10 @@ function renderAdminMenu(){
         const fila = {semana, publicada: (!publicada) ? 'Si':'No'};
         if(idx>=0) state.data.semanas[idx]=fila; else state.data.semanas.push(fila);
       } else {
-        alert((res&&res.error)||'No se pudo cambiar el estado de la semana.');
+        await avisar((res&&res.error)||'No se pudo cambiar el estado de la semana.', 'danger');
       }
     } catch(err){
-      alert('No se pudo conectar al servidor.');
+      await avisar('No se pudo conectar al servidor.', 'danger');
     } finally {
       render();
     }
@@ -1014,7 +1095,7 @@ function renderAdminMenu(){
       const nuevoValor = chkFer.checked;
       if(nuevoValor){
         const pedidosDelDia = state.data.pedidos.filter(p=>p.semana===semana && p.dia===dia).length;
-        if(pedidosDelDia>0 && !confirm(`Ya hay ${pedidosDelDia} pedido${pedidosDelDia===1?'':'s'} anotado${pedidosDelDia===1?'':'s'} para ${dia}. Al marcarlo feriado se eliminarán, porque ese día no habrá colación. ¿Continuar?`)){
+        if(pedidosDelDia>0 && !(await preguntar(`Ya hay ${pedidosDelDia} pedido${pedidosDelDia===1?'':'s'} anotado${pedidosDelDia===1?'':'s'} para ${dia}. Al marcarlo feriado se eliminarán, porque ese día no habrá colación.`, {titulo:'Marcar día feriado', tipo:'danger', labelSi:'Sí, marcar feriado'}))){
           chkFer.checked = false;
           return;
         }
@@ -1028,10 +1109,10 @@ function renderAdminMenu(){
           else if(idx>=0) state.data.feriados.splice(idx,1);
           if(nuevoValor) state.data.pedidos = state.data.pedidos.filter(p=>!(p.semana===semana && p.dia===dia));
         } else {
-          alert((res&&res.error)||'Error');
+          await avisar((res&&res.error)||'Error', 'danger');
         }
       } catch(err){
-        alert('No se pudo conectar al servidor.');
+        await avisar('No se pudo conectar al servidor.', 'danger');
       } finally {
         // Igual que con "especial": siempre se vuelve a dibujar para que el
         // casillero refleje el estado real del servidor, funcione o no.
@@ -1063,10 +1144,10 @@ function renderAdminMenu(){
               o.descripcionespecial = nuevoValor ? (o.descripcionespecial||'') : '';
             });
           } else {
-            alert(res.error||'Error');
+            await avisar(res.error||'Error', 'danger');
           }
         } catch(err){
-          alert('No se pudo conectar al servidor.');
+          await avisar('No se pudo conectar al servidor.', 'danger');
         } finally {
           // Se vuelve a dibujar siempre (haya funcionado o no) para que el
           // casillero y el bloque 🌟 nunca queden desincronizados: si la
@@ -1106,9 +1187,9 @@ function renderAdminMenu(){
             opciones.forEach(o=>o.descripcionespecial = descripcionEspecial);
             inpDescEsp.dataset.guardado = descripcionEspecial;
             btnSaveEsp.textContent='✓'; setTimeout(()=>btnSaveEsp.textContent='Guardar',1000);
-          } else alert(res.error||'Error');
+          } else await avisar(res.error||'Error', 'danger');
         } catch(err){
-          alert('No se pudo conectar al servidor.');
+          await avisar('No se pudo conectar al servidor.', 'danger');
         } finally {
           inpDescEsp.dataset.busy = '';
           btnSaveEsp.disabled = bloqueado;
@@ -1149,16 +1230,16 @@ function renderAdminMenu(){
         const res = await callApi({action:'guardarMenu', data:{semana,dia,opcion:o.opcion,descripcion}});
         btnSave.disabled=false;
         if(res.ok){ o.descripcion = descripcion; agregarPlatoLocal(descripcion); btnSave.textContent='✓'; setTimeout(()=>btnSave.textContent='Guardar',1000); }
-        else alert(res.error||'Error');
+        else await avisar(res.error||'Error', 'danger');
       };
       const btnDel = el('button',{class:'btn sm danger',style:'margin-top:18px'},'Quitar');
       btnDel.disabled = bloqueado;
       btnDel.onclick = async ()=>{
-        if(!confirm('¿Quitar esta opción del menú?')) return;
+        if(!(await preguntar('¿Quitar esta opción del menú?', {titulo:'Quitar opción de menú', tipo:'danger', labelSi:'Sí, quitar'}))) return;
         btnDel.disabled=true;
         const res = await callApi({action:'eliminarMenu', semana, dia, opcion:o.opcion});
         if(res.ok){ state.data.menus = state.data.menus.filter(m=>!(m.semana===semana&&m.dia===dia&&m.opcion===o.opcion)); render(); }
-        else { btnDel.disabled=false; alert(res.error||'Error'); }
+        else { btnDel.disabled=false; await avisar(res.error||'Error', 'danger'); }
       };
       r.append(codeField, descField, btnSave, btnDel);
       card.appendChild(r);
@@ -1187,7 +1268,7 @@ function renderAdminMenu(){
       const res = await callApi({action:'guardarMenu', data:{semana,dia,opcion,descripcion}});
       btnAdd.disabled=false;
       if(res.ok){ state.data.menus.push({semana,dia,opcion,descripcion,activo:'Si',especial:especial?'Si':'No'}); render(); }
-      else alert(res.error||'Error');
+      else await avisar(res.error||'Error', 'danger');
     };
     addRow.append(codeField2, descField2, btnAdd);
     card.appendChild(addRow);
@@ -1534,7 +1615,7 @@ function renderEditorPedido(persona, pedidosSemana, dias, menusPorDia, semana){
           state.data.pedidos.splice(idx,1);
         }
         render();
-      } else alert(res.error||'Error');
+      } else await avisar(res.error||'Error', 'danger');
     };
     row.appendChild(sel);
     body.appendChild(row);
@@ -1858,14 +1939,14 @@ function generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
 }
 function abrirVentanaHtmlParaImprimir(html){
   const ventana = window.open('', '_blank');
-  if(!ventana){ alert('El navegador bloqueó la ventana nueva. Permite ventanas emergentes para generar el PDF.'); return; }
+  if(!ventana){ avisar('El navegador bloqueó la ventana nueva. Permite ventanas emergentes para generar el PDF.', 'warn'); return; }
   ventana.document.open();
   ventana.document.write(html);
   ventana.document.close();
   setTimeout(()=>{ try{ ventana.focus(); ventana.print(); }catch(e){} }, 300);
 }
 function abrirReporteSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles){
-  if(!diasInfo.length){ alert('No hay menús publicados para generar el reporte.'); return; }
+  if(!diasInfo.length){ avisar('No hay menús publicados para generar el reporte.', 'warn'); return; }
   abrirVentanaHtmlParaImprimir(generarHtmlSodexoPDF(nombreSitio, subtitulo, diasInfo, elegibles));
 }
 // Recordatorio de quiénes NO se han anotado (cero pedidos esa semana, es
@@ -1902,11 +1983,11 @@ function generarHtmlNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo,
   </body></html>`;
 }
 function abrirReporteNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo, extraTitulo){
-  if(!noAnotados.length){ alert('Nadie falta por anotarse 🎉'); return; }
+  if(!noAnotados.length){ avisar('Nadie falta por anotarse 🎉', 'ok'); return; }
   abrirVentanaHtmlParaImprimir(generarHtmlNoAnotadosPDF(nombreSitio, subtitulo, noAnotados, extraInfo, extraTitulo));
 }
 function exportarNoAnotadosExcel(nombreArchivo, nombreSitio, subtitulo, noAnotados, extraInfo, extraTitulo){
-  if(!noAnotados.length){ alert('Nadie falta por anotarse 🎉'); return; }
+  if(!noAnotados.length){ avisar('Nadie falta por anotarse 🎉', 'ok'); return; }
   const lista = noAnotados.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre)));
   const filas = [];
   if(nombreSitio) filas.push([nombreSitio]);
@@ -2009,7 +2090,7 @@ function renderAdminPeriodo(){
   const btnVer = el('button',{class:'btn primary',style:'margin-bottom:12px'},'Ver periodo');
   btnVer.onclick = ()=>{
     if(!inpDesde.value || !inpHasta.value || inpDesde.value > inpHasta.value){
-      alert('Revisa las fechas: "Desde" debe ser anterior o igual a "Hasta".');
+      avisar('Revisa las fechas: "Desde" debe ser anterior o igual a "Hasta".', 'warn');
       return;
     }
     state.periodoDesde = inpDesde.value;
